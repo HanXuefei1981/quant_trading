@@ -1,0 +1,38 @@
+# 数据文件（体积过大，不入库）
+data/processed/
+data/raw/
+
+# 模型文件（可选：如需版本化模型可注释掉下两行）
+# data/models/
+
+# 回测图表（二进制，可重新生成）
+data/backtest/*.png
+
+# Python 运行时
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日志
+logs/
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
