@@ -1,5 +1,7 @@
 # A股量化交易系统
 
+[![CI](https://github.com/HanXuefei1981/quant_trading/actions/workflows/ci.yml/badge.svg)](https://github.com/HanXuefei1981/quant_trading/actions/workflows/ci.yml)
+
 基于 LightGBM 的 A 股多因子选股策略，涵盖数据管道、特征工程、模型训练与组合回测完整流程。
 
 ## 项目概览
