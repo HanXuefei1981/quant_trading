@@ -7,12 +7,12 @@ DATA_DIR = ROOT_DIR / "data"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 
-# 通达信本地数据目录（Windows 侧，通过 WSL /mnt 访问）
-TDX_VIPDOC_DIR = Path("/mnt/e/new_tdx/vipdoc")
+# 通达信本地数据目录（可通过环境变量 TDX_VIPDOC_DIR 覆盖）
+TDX_VIPDOC_DIR = Path(os.getenv("TDX_VIPDOC_DIR", str(Path.home() / "tdx_data")))
 
 # 数据参数（通达信数据从 2021-08-02 起）
 START_DATE = "20210101"
-END_DATE = "20260507"
+END_DATE = "20260508"
 ADJUST = "qfq"  # 前复权（通达信日线已含复权价，无需额外处理）
 
 # 技术指标参数
