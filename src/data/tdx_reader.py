@@ -66,6 +66,70 @@ def read_day_file(code: str) -> pd.DataFrame | None:
     return df
 
 
+def get_max_trading_date() -> "date | None":
+    """扫描所有 TDX .day 文件，返回最新的交易日期（date 对象）"""
+    from datetime import date as date_type
+    max_date: "date_type | None" = None
+    for mkt in ("sh", "sz", "bj"):
+        lday_dir = TDX_VIPDOC_DIR / mkt / "lday"
+        if not lday_dir.exists():
+            continue
+        for fname in os.listdir(lday_dir):
+            if not fname.endswith(".day"):
+                continue
+            fpath = lday_dir / fname
+            try:
+                size = fpath.stat().st_size
+                if size < _RECORD_SIZE:
+                    continue
+                with open(fpath, "rb") as f:
+                    f.seek(size - _RECORD_SIZE)
+                    raw_last = f.read(_RECORD_SIZE)
+                dr = struct.unpack_from("<I", raw_last, 0)[0]
+                y, m, d = dr // 10000, (dr % 10000) // 100, dr % 100
+                if not (2000 <= y <= 2100 and 1 <= m <= 12 and 1 <= d <= 31):
+                    continue
+                candidate = date_type(y, m, d)
+                if max_date is None or candidate > max_date:
+                    max_date = candidate
+            except Exception:
+                continue
+    return max_date
+
+
+def is_active_in_period(code: str) -> bool:
+    """只读 .day 文件最后 32 字节，判断该股票在 START_DATE 之后是否还有交易记录。
+
+    用于在 fetch-fund 等场景前快速过滤退市 / 长期停牌的旧股票，
+    避免把它们送进昂贵的网络接口。
+    """
+    mkt, prefix = _market_prefix(code)
+    if mkt is None:
+        return False
+    path = TDX_VIPDOC_DIR / mkt / "lday" / f"{prefix}{code}.day"
+    if not path.exists():
+        return False
+    size = path.stat().st_size
+    if size < _RECORD_SIZE:
+        return False
+    try:
+        with open(path, "rb") as f:
+            f.seek(size - _RECORD_SIZE)
+            raw_last = f.read(_RECORD_SIZE)
+        date_int = struct.unpack_from("<I", raw_last, 0)[0]
+        return date_int >= int(START_DATE)
+    except Exception:
+        return False
+
+
+def get_active_tdx_codes() -> list[str]:
+    """返回在 START_DATE 之后仍有交易记录的 A 股代码（排除退市 / 长停牌）"""
+    all_codes = get_all_tdx_codes()["code"].tolist()
+    active = [c for c in all_codes if is_active_in_period(c)]
+    logger.info(f"TDX 有效股票筛选：{len(active)} / {len(all_codes)}（已剔除退市与长停牌）")
+    return active
+
+
 def get_all_tdx_codes() -> pd.DataFrame:
     """扫描 vipdoc 目录获取全部 A 股代码列表"""
     codes = []

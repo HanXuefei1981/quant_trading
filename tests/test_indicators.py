@@ -40,17 +40,35 @@ def test_add_all_features_returns_dataframe(df_with_features):
 
 def test_feature_columns_exist(df_with_features):
     expected = [
+        # 均线
         "ma5_ratio", "ma10_ratio", "ma20_ratio", "ma60_ratio",
+        # MACD（含新增）
         "macd_dif", "macd_dea", "macd_hist", "macd_cross",
+        "macd_positive", "macd_hist_slope",
+        # RSI
         "rsi", "rsi_oversold", "rsi_overbought",
-        "kdj_k", "kdj_d", "kdj_j",
-        "boll_width", "boll_pct",
+        # KDJ（含新增）
+        "kdj_k", "kdj_d", "kdj_j", "kdj_cross",
+        # 布林（含新增）
+        "boll_width", "boll_pct", "boll_breakout",
+        # ATR
         "atr", "atr_ratio",
+        # 量能
         "vol_ratio", "vol_trend",
-        "ret1", "ret5", "ret10", "ret20",
+        # 多周期收益（含新增）
+        "ret1", "ret3", "ret5", "ret10", "ret20", "ret60", "ret120",
+        # 波动率
         "volatility5", "volatility20",
-        "high_low_ratio", "open_close_ratio",
-        "upper_shadow", "lower_shadow",
+        # 价格结构（含新增）
+        "high_low_ratio", "open_close_ratio", "upper_shadow", "lower_shadow",
+        "amplitude_ma5", "log_price",
+        # 衍生动量（新增）
+        "momentum_quality", "reversal",
+        # 量能情绪（新增）
+        "price_vol_agree", "up_streak",
+        # 均线形态（新增）
+        "bull_score",
+        # 目标列
         "future_ret", "label",
     ]
     for col in expected:
@@ -59,7 +77,7 @@ def test_feature_columns_exist(df_with_features):
 
 def test_get_feature_columns_count(df_with_features):
     feats = get_feature_columns(df_with_features)
-    assert len(feats) == 30, f"预期30个因子，实际 {len(feats)}"
+    assert len(feats) == 44, f"预期44个因子，实际 {len(feats)}: {feats}"
 
 
 def test_get_feature_columns_no_leakage(df_with_features):
@@ -74,9 +92,11 @@ def test_rsi_range(df_with_features):
     assert (rsi >= 0).all() and (rsi <= 100).all()
 
 
-def test_label_values(df_with_features):
-    valid = df_with_features["label"].dropna()
-    assert set(valid.unique()).issubset({-1, 0, 1})
+def test_future_ret_computed(df_with_features):
+    # label 占位为 NaN（由流水线截面步骤填充），future_ret 本身应有有效值
+    valid = df_with_features["future_ret"].dropna()
+    assert len(valid) > 0
+    assert np.isfinite(valid).all()
 
 
 def test_ma_ratio_near_zero_at_ma(df_with_features):
@@ -100,3 +120,48 @@ def test_no_inf_values(df_with_features):
     feats = get_feature_columns(df_with_features)
     has_inf = df_with_features[feats].isin([np.inf, -np.inf]).any().any()
     assert not has_inf, "特征列中存在 inf 值"
+
+
+def test_bull_score_range(df_with_features):
+    score = df_with_features["bull_score"].dropna()
+    assert score.isin([0, 1, 2, 3]).all(), "bull_score 取值应在 0~3"
+
+
+def test_up_streak_range(df_with_features):
+    streak = df_with_features["up_streak"]
+    assert (streak >= 0).all() and (streak <= 10).all()
+
+
+def test_up_streak_resets_on_down_day(df_with_features):
+    streak = df_with_features["up_streak"].values
+    ret1 = df_with_features["ret1"].values
+    for i in range(1, len(streak)):
+        if not np.isnan(ret1[i]) and ret1[i] <= 0:
+            assert streak[i] == 0, f"下跌日 streak 应归零，第 {i} 行"
+
+
+def test_macd_positive_binary(df_with_features):
+    mp = df_with_features["macd_positive"]
+    assert set(mp.unique()).issubset({0, 1})
+
+
+def test_kdj_cross_values(df_with_features):
+    cross = df_with_features["kdj_cross"].dropna()
+    assert set(cross.unique()).issubset({-2.0, -1.0, 0.0, 1.0, 2.0})
+
+
+def test_boll_breakout_binary(df_with_features):
+    bb = df_with_features["boll_breakout"]
+    assert set(bb.unique()).issubset({0, 1})
+
+
+def test_ret_multi_period_exists(df_with_features):
+    for period in [3, 60, 120]:
+        col = f"ret{period}"
+        valid = df_with_features[col].dropna()
+        assert len(valid) > 0, f"{col} 无有效值"
+
+
+def test_reversal_is_neg_ret3(df_with_features):
+    diff = (df_with_features["reversal"] + df_with_features["ret3"]).dropna()
+    assert (diff.abs() < 1e-10).all(), "reversal 应等于 -ret3"
