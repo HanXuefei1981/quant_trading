@@ -93,3 +93,44 @@ def test_download_all_resets_consecutive_on_success():
     assert result["ok"] == 1
     assert result["fail"] == 4
     assert len(result["failed_codes"]) == 4
+
+
+from scripts.fetch_fund_flow_local import print_header, print_report
+
+
+def test_print_header_shows_eta(capsys):
+    """启动摘要应包含总量、缓存数、待下载数、预计时长"""
+    print_header(total=5641, cached_count=531, pending_count=5110, delay=0.3)
+    out = capsys.readouterr().out
+    assert "5641" in out
+    assert "531" in out
+    assert "5110" in out
+    assert "分钟" in out
+
+
+def test_print_report_shows_coverage(capsys, tmp_path):
+    """结束报告应包含覆盖率百分比"""
+    print_report(ok=4000, fail=200, cached_count=531, total=5641,
+                 failed_codes=[], fund_flow_dir=tmp_path)
+    out = capsys.readouterr().out
+    assert "4531" in out   # covered = 4000 + 531
+    assert "5641" in out
+    assert "%" in out
+
+
+def test_print_report_writes_failed_txt(tmp_path, capsys):
+    """有失败股票时应写入 _failed.txt"""
+    failed = ["000999", "600999"]
+    print_report(ok=100, fail=2, cached_count=0, total=102,
+                 failed_codes=failed, fund_flow_dir=tmp_path)
+    failed_file = tmp_path / "_failed.txt"
+    assert failed_file.exists()
+    content = failed_file.read_text().splitlines()
+    assert content == ["000999", "600999"]
+
+
+def test_print_report_no_failed_txt_when_empty(tmp_path, capsys):
+    """无失败时不应创建 _failed.txt"""
+    print_report(ok=100, fail=0, cached_count=0, total=100,
+                 failed_codes=[], fund_flow_dir=tmp_path)
+    assert not (tmp_path / "_failed.txt").exists()

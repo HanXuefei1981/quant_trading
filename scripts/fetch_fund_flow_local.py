@@ -71,3 +71,41 @@ def download_all(
             time.sleep(delay)
 
     return {"ok": ok, "fail": fail, "failed_codes": failed_codes}
+
+
+def print_header(total: int, cached_count: int, pending_count: int, delay: float) -> None:
+    """打印下载开始前的摘要信息。"""
+    est_minutes = pending_count * delay / 60
+    print(f"\n{'='*50}")
+    print(f"  股票总量：{total} 只")
+    print(f"  已缓存：  {cached_count} 只（跳过）")
+    print(f"  待下载：  {pending_count} 只")
+    print(f"  预计时长：~{est_minutes:.0f} 分钟（按 {delay}s/只估算）")
+    print(f"{'='*50}\n")
+
+
+def print_report(
+    ok: int,
+    fail: int,
+    cached_count: int,
+    total: int,
+    failed_codes: list[str],
+    fund_flow_dir: Path = FUND_FLOW_DIR,
+) -> None:
+    """打印下载结束报告，并将失败列表写入 _failed.txt。"""
+    covered = ok + cached_count
+    pct = covered / total * 100 if total > 0 else 0.0
+
+    print(f"\n{'='*50}")
+    print(f"  资金流向下载完成")
+    print(f"  成功：{ok} 只   缓存复用：{cached_count} 只   失败：{fail} 只")
+    print(f"  覆盖率：{pct:.1f}%（{covered} / {total}）")
+
+    if failed_codes:
+        fund_flow_dir.mkdir(parents=True, exist_ok=True)
+        failed_path = fund_flow_dir / "_failed.txt"
+        failed_path.write_text("\n".join(failed_codes))
+        print(f"  失败列表已写入 {failed_path}")
+
+    print(f"{'='*50}")
+    print(f"\n下一步：开启 VPN → 在 Claude Code 中运行 python main.py 1\n")
