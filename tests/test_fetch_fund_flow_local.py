@@ -46,7 +46,7 @@ def test_get_pending_codes_none_cached(tmp_path):
     assert result == ["000001", "600036"]
 
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from scripts.fetch_fund_flow_local import download_all
 
