@@ -156,7 +156,6 @@ def test_main_no_pending_exits_early(tmp_path, capsys, monkeypatch):
 
 def test_main_custom_codes_bypass_pending_filter(monkeypatch, capsys):
     """指定 --codes 时直接使用指定列表，不经过 get_pending_codes 过滤"""
-    import pandas as pd
     dummy = pd.DataFrame({"date": ["2026-01-01"], "major_net_inflow": [1.0]})
 
     monkeypatch.setattr(
