@@ -134,3 +134,39 @@ def test_print_report_no_failed_txt_when_empty(tmp_path, capsys):
     print_report(ok=100, fail=0, cached_count=0, total=100,
                  failed_codes=[], fund_flow_dir=tmp_path)
     assert not (tmp_path / "_failed.txt").exists()
+
+
+from scripts.fetch_fund_flow_local import main
+
+
+def test_main_no_pending_exits_early(tmp_path, capsys, monkeypatch):
+    """无待下载股票时应打印提示后退出，不调用 download_all"""
+    monkeypatch.setattr(
+        "scripts.fetch_fund_flow_local.get_all_codes",
+        lambda kline_dir=None: ["000001"],
+    )
+    monkeypatch.setattr(
+        "scripts.fetch_fund_flow_local.get_pending_codes",
+        lambda codes, fund_flow_dir=None: [],
+    )
+    main([])  # 空 argv
+    out = capsys.readouterr().out
+    assert "无需重新下载" in out
+
+
+def test_main_custom_codes_bypass_pending_filter(monkeypatch, capsys):
+    """指定 --codes 时直接使用指定列表，不经过 get_pending_codes 过滤"""
+    import pandas as pd
+    dummy = pd.DataFrame({"date": ["2026-01-01"], "major_net_inflow": [1.0]})
+
+    monkeypatch.setattr(
+        "scripts.fetch_fund_flow_local.get_all_codes",
+        lambda kline_dir=None: ["000001", "600036"],
+    )
+    monkeypatch.setattr(
+        "scripts.fetch_fund_flow_local.fetch_fund_flow",
+        lambda code, use_cache: dummy,
+    )
+    main(["--codes", "600036", "--delay", "0"])
+    out = capsys.readouterr().out
+    assert "下载完成" in out

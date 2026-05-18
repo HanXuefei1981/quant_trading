@@ -109,3 +109,55 @@ def print_report(
 
     print(f"{'='*50}")
     print(f"\n下一步：开启 VPN → 在 Claude Code 中运行 python main.py 1\n")
+
+
+def main(argv: Optional[list[str]] = None) -> None:
+    parser = argparse.ArgumentParser(
+        description="个股资金流向本地下载（关 VPN 后运行）"
+    )
+    parser.add_argument(
+        "--delay", type=float, default=0.3,
+        help="每只股票请求间隔（秒），默认 0.3",
+    )
+    parser.add_argument(
+        "--max-errors", type=int, default=200,
+        help="连续失败上限，默认 200",
+    )
+    parser.add_argument(
+        "--codes", nargs="+",
+        help="指定股票代码（空格分隔），默认全量",
+    )
+    args = parser.parse_args(argv)
+
+    all_codes = get_all_codes()
+
+    if args.codes:
+        pending = args.codes
+    else:
+        pending = get_pending_codes(all_codes)
+
+    if not pending:
+        print("所有股票已有缓存，无需重新下载。")
+        return
+
+    cached_count = len(all_codes) - len(pending)
+    print_header(
+        total=len(all_codes),
+        cached_count=cached_count,
+        pending_count=len(pending),
+        delay=args.delay,
+    )
+
+    stats = download_all(pending, delay=args.delay, max_errors=args.max_errors)
+
+    print_report(
+        ok=stats["ok"],
+        fail=stats["fail"],
+        cached_count=cached_count,
+        total=len(all_codes),
+        failed_codes=stats["failed_codes"],
+    )
+
+
+if __name__ == "__main__":
+    main()
