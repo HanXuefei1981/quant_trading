@@ -147,6 +147,7 @@ def test_fetch_all_skips_cached_incremental(tmp_path):
         stats = collector.fetch_all(["000001", "600036"], mode="report", incremental=True)
 
     assert stats.cached == 1
+    assert stats.ok == 1
     assert mock_api.call_count == 1  # 只拉了 600036
 
 
