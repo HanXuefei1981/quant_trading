@@ -39,10 +39,19 @@ def sync(args):
     expected_date = zip_date - timedelta(days=1)
     logger.info(f"压缩包文件名日期: {zip_date}  →  期望数据截止: {expected_date}")
 
-    # 2. 解压到 TDX 目录
+    # 2. 解压到 TDX 目录（兼容 Windows zip 中的反斜杠路径）
     logger.info(f"开始解压 {zip_path.name} → {TDX_VIPDOC_DIR} ...")
+    TDX_VIPDOC_DIR.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(zip_path), "r") as zf:
-        zf.extractall(str(TDX_VIPDOC_DIR))
+        for member in zf.infolist():
+            # 将 Windows 反斜杠统一转换为正斜杠，再用 Path 规范化
+            normalized = Path(member.filename.replace("\\", "/"))
+            dest = TDX_VIPDOC_DIR / normalized
+            if member.is_dir():
+                dest.mkdir(parents=True, exist_ok=True)
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(zf.read(member.filename))
     logger.info("解压完成")
 
     # 3. 读取实际最大交易日并与期望日期核对
@@ -110,8 +119,183 @@ def fetch_fund(args):
     logger.info("现在可以运行: python main.py 1  让特征工程加入基本面因子")
 
 
+def fetch_flow(args):
+    """批量拉取个股主力资金流向 + 北向资金并缓存到 data/fund_flow/
+
+    个股资金流向来自东方财富接口（akshare），约 5000 只股票需 40-60 分钟。
+    北向资金为一次性拉取（沪深港通历史净买入）。
+    """
+    from src.data.fund_flow import fetch_all_fund_flow, fetch_northbound_flow
+    from src.data.tdx_reader import get_active_tdx_codes
+
+    if not _SYNC_STATE_FILE.exists():
+        logger.error("未找到数据同步确认记录，请先运行 sync 命令")
+        return
+
+    # 1. 北向资金（一次搞定）
+    logger.info("拉取北向资金历史数据...")
+    north_df = fetch_northbound_flow(use_cache=not args.refresh)
+    if north_df is not None:
+        logger.info(
+            f"北向资金数据已就绪：{len(north_df)} 条"
+            f"（{north_df['date'].min().date()} ~ {north_df['date'].max().date()}）"
+        )
+    else:
+        logger.warning("北向资金拉取失败，north_net_* 因子将缺失")
+
+    # 2. 个股主力资金流向
+    codes = get_active_tdx_codes()
+    if args.sample:
+        codes = codes[:args.sample]
+        logger.info(f"调试模式：仅拉取 {args.sample} 只股票的资金流向")
+
+    logger.info(
+        f"开始拉取 {len(codes)} 只股票的资金流向，延迟 {args.delay}s/只"
+        f"（预计 {len(codes) * args.delay / 60:.0f} 分钟）..."
+    )
+    stats = fetch_all_fund_flow(codes, delay=args.delay, use_cache=not args.refresh)
+    logger.info(f"完成：新拉取 {stats['ok']}，缓存复用 {stats['cached']}，失败 {stats['fail']}")
+    logger.info("现在可以运行: python main.py 1  让特征工程加入资金流向因子")
+
+
+def collect(args):
+    """采集所有原始数据到 data/raw/（解耦层：只负责数据采集，不做特征工程）
+
+    执行步骤：
+      1. TDX → data/raw/kline/       （本地二进制转 Parquet，极快）
+      2. 北向资金 → data/raw/northbound.parquet  （同花顺 THS API，当日快照追加）
+      3. 腾讯财经 → data/raw/tencent/ （可选，--with-tencent，当日快照追加）
+
+    基本面与个股资金流向缓存路径不变（data/fundamentals/, data/fund_flow/），
+    使用原有的 fetch-fund / fetch-flow 命令更新。
+    """
+    from src.collectors.tdx_collector import TDXCollector
+    from src.collectors.northbound_collector import NorthboundCollector
+    from src.data.tdx_reader import get_active_tdx_codes
+
+    if not _SYNC_STATE_FILE.exists():
+        logger.error("未找到数据同步确认记录，请先运行 sync 命令")
+        return
+
+    # Step 1: TDX K 线 → data/raw/kline/
+    logger.info("Step 1: 转换 TDX K 线 → data/raw/kline/")
+    tdx = TDXCollector()
+    codes = get_active_tdx_codes()
+    if args.sample:
+        codes = codes[:args.sample]
+    incremental = not args.refresh
+    kline_stats = tdx.fetch_all(codes, incremental=incremental)
+    logger.info(f"K 线转换完成：{kline_stats}")
+
+    # Step 2: 北向资金今日快照
+    logger.info("Step 2: 更新北向资金快照 → data/raw/northbound.parquet")
+    north = NorthboundCollector()
+    north_stats = north.fetch_all([])
+    logger.info(f"北向资金更新完成：{north_stats}")
+
+    # Step 3: 腾讯财经（可选）
+    if getattr(args, "with_tencent", False):
+        from src.collectors.tencent_collector import TencentCollector
+        logger.info("Step 3: 采集腾讯财经 PE/PB/市值快照 → data/raw/tencent/")
+        tencent = TencentCollector()
+        tencent_stats = tencent.fetch_all(codes, incremental=incremental)
+        logger.info(f"腾讯快照完成：{tencent_stats}")
+
+    logger.info("collect 完成，现在可以运行: python main.py 1")
+
+
+def update(args):
+    """每日增量更新：mootdx拉取新K线 → 北向快照 → [腾讯快照] → 增量特征 → [可选重训]
+
+    日常用法（无需依赖本地 TDX .day 文件，直接通过 mootdx TCP 拉取新数据）：
+      python main.py update                   # 标准每日更新（2-3 分钟）
+      python main.py update --with-tencent    # 额外更新腾讯 PE/PB 快照
+      python main.py update --retrain         # 更新后触发 Phase 2 重训
+
+    月初全量刷新（使用压缩包重建完整历史，之后恢复每日 update）：
+      python main.py sync --zip hsjday-YYYY-MM-DD.zip  &&  python main.py 1
+    """
+    from src.data import watermark as wm
+    from src.collectors.tdx_collector import TDXCollector
+    from src.collectors.northbound_collector import NorthboundCollector
+    from src.data.tdx_reader import get_active_tdx_codes
+    from src.features.assembler import assemble_incremental
+    from datetime import date as date_cls
+
+    # 读取当前水位
+    kline_since = wm.get_since("kline")
+    logger.info(f"K线水位: {kline_since}  特征水位: {wm.get_since('features')}")
+
+    codes = get_active_tdx_codes()
+    if args.sample:
+        codes = codes[:args.sample]
+
+    # Step 1: 通过 mootdx TCP 拉取增量 K 线
+    logger.info("Step 1: mootdx 增量K线拉取")
+    tdx = TDXCollector()
+    if kline_since is None:
+        logger.error(
+            "未找到K线水位记录，首次建库请运行:\n"
+            "  python main.py sync --zip <压缩包>  &&  python main.py collect  &&  python main.py 1"
+        )
+        return
+    kline_stats = tdx.fetch_incremental_mootdx(codes, since=kline_since)
+    logger.info(f"K线更新：{kline_stats}")
+
+    # 更新 kline 水位：只在有新数据时更新，从实际更新的股票中找最新日期
+    if kline_stats.ok > 0:
+        kline_dir = Path(__file__).parent / "data" / "raw" / "kline"
+        for c in codes:
+            try:
+                sample_df = pd.read_parquet(kline_dir / f"{c}.parquet")
+                wm.update("kline", pd.to_datetime(sample_df["date"]).max().date())
+                break
+            except Exception:
+                continue
+
+    # Step 2: 北向资金今日快照
+    logger.info("Step 2: 更新北向资金快照")
+    north = NorthboundCollector()
+    north_stats = north.fetch_all([])
+    logger.info(f"北向资金：{north_stats}")
+    if north_stats.ok > 0:
+        wm.update("northbound", date_cls.today())
+
+    # Step 3: 腾讯财经快照（可选）
+    if getattr(args, "with_tencent", False):
+        from src.collectors.tencent_collector import TencentCollector
+        logger.info("Step 3: 腾讯财经 PE/PB 快照")
+        tencent = TencentCollector()
+        tencent_stats = tencent.fetch_all(codes, incremental=True)
+        logger.info(f"腾讯快照：{tencent_stats}")
+        if tencent_stats.ok > 0:
+            wm.update("tencent", date_cls.today())
+
+    # Step 4: 增量特征组装
+    logger.info("Step 4: 增量特征组装")
+    new_df = assemble_incremental()
+    if new_df.empty:
+        logger.info("无新特征数据，今日可能已更新或无新交易日")
+    else:
+        logger.info(f"增量特征完成，新增 {len(new_df)} 行")
+
+    # Step 5: 可选重训
+    if getattr(args, "retrain", False):
+        logger.info("Step 5: 触发 Phase 2 重训（--retrain 已指定）")
+
+        class _RetrainArgs:
+            walk_forward = False
+            rolling = True
+            train_years = getattr(args, "train_years", 2)
+            final = False
+
+        phase2(_RetrainArgs())
+
+    logger.info("update 完成")
+
+
 def phase1(args):
-    """Phase 1: 数据拉取 + 特征工程（须先通过 sync 确认）"""
+    """Phase 1: 特征工程（须先通过 sync 确认 + collect 采集数据）"""
     # 门控：必须先通过 sync 确认
     if not _SYNC_STATE_FILE.exists():
         logger.error("未找到数据同步确认记录，请先运行:")
@@ -121,7 +305,26 @@ def phase1(args):
     state = json.loads(_SYNC_STATE_FILE.read_text(encoding="utf-8"))
     logger.info(f"已确认数据截止日期: {state['confirmed_date']}  来源: {state.get('zip_file', '未知')}")
 
-    # 基本面缓存检查：缺失数过半给警告（不阻断，但提示）
+    # 检查 data/raw/kline/ 是否有数据
+    kline_dir = Path(__file__).parent / "data" / "raw" / "kline"
+    kline_count = len(list(kline_dir.glob("*.parquet"))) if kline_dir.exists() else 0
+
+    if kline_count == 0:
+        # 兼容旧流程：自动触发 TDX 转换（首次运行时方便使用）
+        logger.info("data/raw/kline/ 为空，自动执行 TDX 转换...")
+        from src.collectors.tdx_collector import TDXCollector
+        from src.data.tdx_reader import get_active_tdx_codes
+        tdx = TDXCollector()
+        codes = get_active_tdx_codes()
+        if args.sample:
+            codes = codes[:args.sample]
+        tdx.fetch_all(codes, incremental=True)
+        kline_count = len(list(kline_dir.glob("*.parquet")))
+        logger.info(f"TDX 转换完成，共 {kline_count} 只股票")
+    else:
+        logger.info(f"data/raw/kline/ 已有 {kline_count} 只股票的 K 线数据")
+
+    # 基本面缓存检查
     fund_dir = Path(__file__).parent / "data" / "fundamentals"
     fund_count = len(list(fund_dir.glob("*.parquet"))) if fund_dir.exists() else 0
     if fund_count < 1000:
@@ -130,11 +333,10 @@ def phase1(args):
         )
         logger.warning("建议先运行: python main.py fetch-fund  （约 1-2 小时）")
 
-    from src.data.pipeline import run_data_pipeline
-    df = run_data_pipeline(
+    from src.features.assembler import assemble
+    df = assemble(
         sample_size=args.sample,
-        delay=args.delay,
-        use_cache=False,   # 全量更新，不使用缓存
+        use_cache=False,
     )
     logger.info(f"Phase 1 完成，数据集形状: {df.shape}")
     logger.info(f"特征列数: {df.shape[1]}")
@@ -144,9 +346,11 @@ def phase1(args):
 
 def phase2(args):
     """Phase 2: 模型训练"""
+    import json
     from src.data.pipeline import load_processed_data
-    from src.models.trainer import run_training
+    from src.models.trainer import run_training, run_training_rolling, run_training_final, walk_forward_cv
     from src.models.evaluator import run_evaluation
+    from config.settings import PROCESSED_DIR
 
     logger.info("Phase 2 开始：加载数据")
     try:
@@ -158,8 +362,35 @@ def phase2(args):
     logger.info(f"数据加载完成：{len(df)} 行，{df['code'].nunique()} 只股票")
     logger.info(f"时间范围：{df['date'].min().date()} ~ {df['date'].max().date()}")
 
-    lgbm_model, ridge_model, w_lgbm, w_ridge, feature_cols, train_df, val_df, test_df = run_training(df)
+    walk_forward = getattr(args, "walk_forward", False)
+    rolling = getattr(args, "rolling", False)
+
+    if walk_forward:
+        logger.info("=== Walk-Forward CV 诊断（扩展窗口，18个月起步，每折6个月 OOS）===")
+        wf_results = walk_forward_cv(df, min_train_months=18, pred_months=6)
+
+        model_dir = PROCESSED_DIR.parent / "models"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        wf_path = model_dir / "walk_forward_results.json"
+        with open(wf_path, "w", encoding="utf-8") as f:
+            json.dump(wf_results, f, ensure_ascii=False, indent=2)
+        logger.info(f"Walk-Forward 结果已保存至 {wf_path}")
+
+        logger.info("=== 生产模型：滚动窗口重训（最近 2 年数据）===")
+        lgbm_model, ridge_model, w_lgbm, w_ridge, feature_cols, train_df, val_df, test_df = \
+            run_training_rolling(df, train_years=2)
+    elif rolling:
+        train_years = getattr(args, "train_years", 2)
+        logger.info(f"=== 滚动窗口训练（最近 {train_years} 年，跳过 WF CV）===")
+        lgbm_model, ridge_model, w_lgbm, w_ridge, feature_cols, train_df, val_df, test_df = \
+            run_training_rolling(df, train_years=train_years)
+    else:
+        lgbm_model, ridge_model, w_lgbm, w_ridge, feature_cols, train_df, val_df, test_df = run_training(df)
+
     run_evaluation(lgbm_model, feature_cols, train_df, val_df, test_df)
+
+    if getattr(args, "final", False):
+        run_training_final(df, lgbm_model.best_iteration, w_lgbm, w_ridge, feature_cols)
 
     logger.info("Phase 2 完成，模型已保存至 data/models/")
 
@@ -195,6 +426,7 @@ def phase3(args):
         signal_df, start, end,
         top_k=top_k,
         rebalance_every=rebalance_days,
+        min_signal=getattr(args, "min_signal", 0.0),
         signal_weighted=not getattr(args, "equal_weight", False),
         max_stock_weight=getattr(args, "max_weight", 0.05),
         max_sector_weight=getattr(args, "max_sector_weight", 0.40),
@@ -212,7 +444,7 @@ def phase3(args):
 
 def scan(args):
     """快捷扫描：输出当前最新截面的 Top-N 信号排名，供散户做参考"""
-    from src.data.pipeline import load_inference_data
+    from src.features.assembler import assemble_inference as load_inference_data
     from src.models.trainer import load_ensemble
     from src.backtest.engine import generate_signals
     from src.data.stock_filter import get_st_codes
@@ -265,8 +497,8 @@ def scan(args):
 
 def main():
     parser = argparse.ArgumentParser(description="A 股量化交易系统")
-    parser.add_argument("phase", choices=["sync", "fetch-fund", "1", "2", "3", "scan"],
-                        help="运行阶段：sync=同步TDX数据 | fetch-fund=拉取基本面 | 1=特征工程 | 2=训练 | 3=回测 | scan=选股扫描")
+    parser.add_argument("phase", choices=["sync", "collect", "fetch-fund", "fetch-flow", "update", "1", "2", "3", "scan"],
+                        help="运行阶段：sync=同步TDX数据 | collect=采集原始数据 | fetch-fund=拉取基本面 | fetch-flow=拉取资金流向 | update=每日增量更新 | 1=特征工程 | 2=训练 | 3=回测 | scan=选股扫描")
     parser.add_argument("--zip", default=None,
                         help="sync 命令专用：通达信压缩包完整路径（如 /path/to/hsjday-2026-05-12.zip）")
     parser.add_argument("--refresh", action="store_true",
@@ -274,6 +506,18 @@ def main():
     parser.add_argument("--sample", type=int, default=None, help="调试时限制股票数量")
     parser.add_argument("--delay", type=float, default=0.3, help="拉取间隔（秒）")
     parser.add_argument("--no-cache", action="store_true", help="强制重新下载数据（phase1 已默认全量更新）")
+    parser.add_argument("--with-tencent", action="store_true", dest="with_tencent",
+                        help="collect: 同时采集腾讯财经 PE/PB/市值快照（data/raw/tencent/）")
+    parser.add_argument("--walk-forward", action="store_true", dest="walk_forward",
+                        help="Phase2: 先跑扩展窗口 Walk-Forward CV 诊断，再用最近 2 年数据训练生产模型")
+    parser.add_argument("--rolling", action="store_true", dest="rolling",
+                        help="Phase2: 直接用滚动窗口训练（最近 N 年），跳过 WF CV（更快）")
+    parser.add_argument("--train-years", type=int, default=2, dest="train_years",
+                        help="Phase2 --rolling: 滚动窗口训练年数（默认 2 年）")
+    parser.add_argument("--min-signal", type=float, default=0.0, dest="min_signal",
+                        help="Phase3: 信号最低阈值，低于此值的股票不纳入选股池（默认 0.0，即不过滤）")
+    parser.add_argument("--final", action="store_true", dest="final",
+                        help="Phase2: 评估后用全量有标签数据重训生产模型（固定迭代轮数，不影响评估指标）")
     parser.add_argument("--top-k", type=int, default=50, dest="top_k", help="Phase3: 每期持仓股票数（默认50）")
     parser.add_argument("--rebalance", type=int, default=5, help="Phase3: 调仓间隔交易日数（默认5）")
     parser.add_argument("--max-weight", type=float, default=0.05, dest="max_weight", help="Phase3: 单股最大权重（默认0.05）")
@@ -281,6 +525,8 @@ def main():
     parser.add_argument("--max-turnover", type=float, default=0.5, dest="max_turnover", help="Phase3: 单次最大单向换手率（默认0.5）")
     parser.add_argument("--equal-weight", action="store_true", dest="equal_weight", help="Phase3: 等权重替代信号加权")
     parser.add_argument("--replace-only", action="store_true", dest="replace_only", help="Phase3/scan: 散户模式，只换出跌出候选池的股票，不做存量再平衡")
+    parser.add_argument("--retrain", action="store_true", dest="retrain",
+                        help="update: 增量更新完成后触发 Phase 2 滚动窗口重训")
     args = parser.parse_args()
 
     if args.phase == "sync" and not args.zip:
@@ -288,7 +534,10 @@ def main():
 
     phases = {
         "sync": sync,
+        "collect": collect,
         "fetch-fund": fetch_fund,
+        "fetch-flow": fetch_flow,
+        "update": update,
         "1": phase1,
         "2": phase2,
         "3": phase3,
