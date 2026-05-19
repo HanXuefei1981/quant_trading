@@ -146,7 +146,7 @@ class ReportCollector(BaseCollector):
         consecutive_errors = 0
         cache_dir = self._reports_dir if mode == "report" else self._eps_dir
 
-        for i, code in enumerate(tqdm(codes, desc=f"研报采集[{mode}]")):
+        for code in tqdm(codes, desc=f"研报采集[{mode}]"):
             cache_path = cache_dir / f"{code}.parquet"
             if incremental and cache_path.exists():
                 stats.cached += 1
