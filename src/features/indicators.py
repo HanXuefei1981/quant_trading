@@ -300,5 +300,11 @@ def get_feature_columns(df: pd.DataFrame) -> list[str]:
         "major_net_inflow", "major_net_pct", "north_net_inflow",
         # 龙虎榜原始值（衍生特征 lhb_net_buy_30d / lhb_count_30d 才入模型）
         "lhb_buy_amount", "lhb_sell_amount",
+        # EPS 快照暂无历史序列（仅有当日单条记录），排除避免引入 NaN 噪声
+        "eps_consensus_cur", "eps_revision",
+        # 研报因子暂排除：与已有因子高度相关且在测试期引入噪声
+        "report_count_30d", "analyst_count",
+        # LHB 因子在当前测试期边际效果有限，待数据积累后再验证
+        "lhb_count_30d",
     }
     return [c for c in df.columns if c not in exclude]
