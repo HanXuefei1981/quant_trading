@@ -224,11 +224,7 @@ def assemble(
         if "major_net_inflow" not in raw.columns:
             flow_missing += 1
 
-        # 合并北向资金
-        if north_df is not None:
-            raw = _merge_northbound(raw, north_df)
-
-        # 特征工程
+        # 特征工程（北向资金由 add_signal_features 内部 merge，勿在此重复合并）
         df = add_all_features(raw)
         df = add_report_features(df, code)
         df = add_signal_features(df, code, lhb_df=lhb_df, north_df=north_df)
@@ -328,8 +324,6 @@ def assemble_incremental() -> pd.DataFrame:
 
         raw = _merge_fundamentals(raw, code)
         raw = _merge_fund_flow(raw, code)
-        if north_df is not None:
-            raw = _merge_northbound(raw, north_df)
 
         df = add_all_features(raw)
         df = add_report_features(df, code)
