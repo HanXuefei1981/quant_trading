@@ -37,7 +37,7 @@ def test_report_count_30d_rolling(tmp_path):
 
     # 2026-05-12: available 5-02 和 5-11，窗口内2篇
     assert result.loc[result["date"] == pd.Timestamp("2026-05-12"), "report_count_30d"].iloc[0] == 2
-    # 2026-06-15: 只有 5-11 的 available_date 5-11 在30日内
+    # 2026-06-15: 5-02 超出30交易日窗口，只有 5-11（5-10研报的 available_date）在窗口内
     assert result.loc[result["date"] == pd.Timestamp("2026-06-15"), "report_count_30d"].iloc[0] == 1
 
 

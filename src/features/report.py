@@ -112,7 +112,7 @@ def _add_eps_features(df: pd.DataFrame, code: str, base: Path) -> pd.DataFrame:
         return df
 
     # EPS 快照以 snapshot_date 作为 available_date（月频，不需要额外偏移）
-    eps = eps.sort_values("snapshot_date").reset_index(drop=True)
+    eps = eps.drop_duplicates("snapshot_date", keep="last").sort_values("snapshot_date").reset_index(drop=True)
     eps["eps_revision"] = np.sign(eps["eps_cur"].diff()).fillna(0).astype(int)
 
     # merge_asof：对每个 kline.date 取最近的 snapshot_date ≤ date（前向填充）
