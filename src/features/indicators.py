@@ -26,6 +26,7 @@ def add_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _add_sentiment(df)
     df = _add_ma_alignment(df)
     df = _add_fundamental_features(df)
+    df = _add_fund_flow_features(df)
     df = _add_label(df)
     return df
 
@@ -232,6 +233,42 @@ def _add_fundamental_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ── 资金流向（个股主力 + 北向宏观）──────────────────────────────────────────
+
+_FLOW_HIST_WINDOW = 252  # 自身历史分位窗口（约 1 年）
+
+
+def _add_fund_flow_features(df: pd.DataFrame) -> pd.DataFrame:
+    """资金流向因子。无数据时全部填 NaN，交由预处理填均值。"""
+    # --- 个股主力资金 ---
+    if "major_net_inflow" in df.columns:
+        # log(|净流入|)×sign：压缩量级差异，保留方向性
+        df["major_net_log"] = (
+            np.sign(df["major_net_inflow"])
+            * np.log1p(df["major_net_inflow"].abs())
+        )
+        # 近5日累计（动量方向）
+        df["major_net_5d"] = df["major_net_log"].rolling(5, min_periods=1).sum()
+    else:
+        df["major_net_log"] = np.nan
+        df["major_net_5d"] = np.nan
+
+    if "major_net_pct" in df.columns:
+        # 主力净占比（-100%~100%），反映控盘程度
+        df["major_net_ratio"] = df["major_net_pct"] / 100.0
+        # 自身252日分位：控盘程度相对于自身历史的高低
+        df["major_net_self_pct"] = (
+            df["major_net_pct"]
+            .rolling(_FLOW_HIST_WINDOW, min_periods=60)
+            .rank(pct=True)
+        )
+    else:
+        df["major_net_ratio"] = np.nan
+        df["major_net_self_pct"] = np.nan
+
+    return df
+
+
 # ── 标签（占位，由流水线截面步骤统一填充）───────────────────────────────────
 
 def _add_label(df: pd.DataFrame) -> pd.DataFrame:
@@ -259,5 +296,7 @@ def get_feature_columns(df: pd.DataFrame) -> list[str]:
         # 基本面原始值（log/self_pct 衍生量才是特征）
         "pe_ttm", "pe_static", "pb", "ps", "pcf", "peg",
         "market_cap", "float_market_cap", "total_shares", "float_shares",
+        # 资金流向原始值（衍生特征才入模型）
+        "major_net_inflow", "major_net_pct", "north_net_inflow",
     }
     return [c for c in df.columns if c not in exclude]
