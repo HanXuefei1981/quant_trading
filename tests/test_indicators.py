@@ -77,7 +77,7 @@ def test_feature_columns_exist(df_with_features):
 
 def test_get_feature_columns_count(df_with_features):
     feats = get_feature_columns(df_with_features)
-    assert len(feats) == 44, f"预期44个因子，实际 {len(feats)}: {feats}"
+    assert len(feats) == 58, f"预期58个因子，实际 {len(feats)}: {feats}"
 
 
 def test_get_feature_columns_no_leakage(df_with_features):
