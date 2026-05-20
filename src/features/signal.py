@@ -55,6 +55,7 @@ def _add_lhb_features(
         return df
 
     stock_lhb["date"] = pd.to_datetime(stock_lhb["date"])
+    # +1 calendar day: K 线仅含交易日，周五+1=周六不会命中当日行，但 <= 周一条件成立，行为正确
     stock_lhb["available_date"] = stock_lhb["date"] + pd.Timedelta(days=1)
 
     dates = df["date"].values
