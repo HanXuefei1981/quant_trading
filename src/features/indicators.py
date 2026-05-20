@@ -298,5 +298,7 @@ def get_feature_columns(df: pd.DataFrame) -> list[str]:
         "market_cap", "float_market_cap", "total_shares", "float_shares",
         # 资金流向原始值（衍生特征才入模型）
         "major_net_inflow", "major_net_pct", "north_net_inflow",
+        # 龙虎榜原始值（衍生特征 lhb_net_buy_30d / lhb_count_30d 才入模型）
+        "lhb_buy_amount", "lhb_sell_amount",
     }
     return [c for c in df.columns if c not in exclude]
