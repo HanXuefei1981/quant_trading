@@ -122,7 +122,8 @@ class SignalCollector(BaseCollector):
                 sub = df[df["code"] == code]
                 if not sub.empty:
                     parts.append(sub)
-            except Exception:
+            except Exception as exc:
+                logger.warning(f"读取龙虎榜文件 {p} 失败，已跳过: {exc}")
                 continue
         if not parts:
             return None
