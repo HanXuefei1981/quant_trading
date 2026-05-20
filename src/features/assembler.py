@@ -86,7 +86,8 @@ def _load_lhb_all() -> Optional[pd.DataFrame]:
             df = pd.read_parquet(p)
             df["date"] = pd.to_datetime(df["date"])
             parts.append(df)
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"跳过损坏的龙虎榜文件 {p}: {exc}")
             continue
     if not parts:
         return None
