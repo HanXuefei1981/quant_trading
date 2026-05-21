@@ -31,7 +31,7 @@ def _kline_df(code: str = "000001", dates: list[str] | None = None) -> pd.DataFr
         "open": [10.0] * n,
         "high": [11.0] * n,
         "low":  [9.5]  * n,
-        "close": [10.5, 10.8, 11.0][:n],
+        "close": ([10.5, 10.8, 11.0] * ((n // 3) + 1))[:n],
         "amount": [1e8] * n,
         "volume": [1_000_000] * n,
     })
