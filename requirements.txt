@@ -16,3 +16,6 @@ matplotlib>=3.10.0
 
 # PDF 报告生成
 reportlab>=4.5.0
+
+# 数据库
+duckdb>=1.2.0

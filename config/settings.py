@@ -10,6 +10,9 @@ PROCESSED_DIR = DATA_DIR / "processed"
 # 通达信本地数据目录（可通过环境变量 TDX_VIPDOC_DIR 覆盖）
 TDX_VIPDOC_DIR = Path(os.getenv("TDX_VIPDOC_DIR", str(Path.home() / "tdx_data")))
 
+# 数据库路径（存放于 Elements 扩展硬盘，可通过环境变量覆盖）
+DB_PATH = Path(os.getenv("QUANT_DB_PATH", "/Volumes/Elements/5、投资/quant_trading/quant.duckdb"))
+
 # 数据参数（通达信数据从 2021-08-02 起）
 START_DATE = "20210101"
 END_DATE = "20991231"   # 远未来：自动使用所有已下载的 TDX 数据
