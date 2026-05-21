@@ -86,6 +86,9 @@ CREATE TABLE IF NOT EXISTS eps_snapshot (
 )
 """
 
+# features 表仅预建 PK 列；~100 个业务列（ma5_ratio、rsi14、label 等）在
+# FeatureRepo.upsert_features() 首次写入时通过 ALTER TABLE ADD COLUMN 动态添加。
+# 这样 schema 始终与 assembler 输出同步，新增因子只需更新 get_feature_columns()。
 _CREATE_FEATURES = """
 CREATE TABLE IF NOT EXISTS features (
     date  DATE    NOT NULL,
