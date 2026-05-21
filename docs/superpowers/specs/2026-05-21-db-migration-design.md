@@ -18,7 +18,9 @@
 
 | 决策项 | 选择 | 理由 |
 |--------|------|------|
-| 数据库 | DuckDB（`data/quant.duckdb`） | 嵌入式、无服务进程、原生 Parquet 支持、列式存储适合分析查询 |
+| 数据库 | DuckDB | 嵌入式、无服务进程、原生 Parquet 支持、列式存储适合分析查询 |
+| DB 存储位置 | 扩展硬盘 Elements（`/Volumes/Elements/5、投资/quant_trading/quant.duckdb`） | 系统盘空间有限，DB 文件预计数十 GB；代码仓库留在系统盘，数据文件全部外置 |
+| 路径配置 | 环境变量 `QUANT_DB_PATH` 可覆盖默认路径 | 与现有 `TDX_VIPDOC_DIR` 的处理方式一致，便于不同机器切换 |
 | 迁移策略 | 完全替换 Parquet 文件树 | DB 为唯一数据源，避免双写维护负担 |
 | 特征存储 | RAW 层 + FEATURE 层同时存储 | Assembler 计算后写入 features 表，Trainer/Backtest 直接读取，不重复计算 |
 | 访问方式 | Repository 模式（DAL） | 所有业务层只调用 DAL 接口，不直接操作 DuckDB 连接 |
@@ -28,7 +30,7 @@
 ## 数据库结构总览
 
 ```
-data/quant.duckdb
+/Volumes/Elements/5、投资/quant_trading/quant.duckdb   （默认路径，可由 QUANT_DB_PATH 覆盖）
 ├── RAW 层（7 张表）
 │   ├── kline           ← data/raw/kline/{code}.parquet（5644 文件，269MB）
 │   ├── fundamentals    ← data/fundamentals/{code}.parquet（599MB）
@@ -189,18 +191,24 @@ src/dal/
 ### connection.py
 
 ```python
+import os
 import duckdb
-from config.settings import DATA_DIR
+from pathlib import Path
 
-_DB_PATH = DATA_DIR / "quant.duckdb"
+_DEFAULT_DB_PATH = Path("/Volumes/Elements/5、投资/quant_trading/quant.duckdb")
+_DB_PATH = Path(os.getenv("QUANT_DB_PATH", str(_DEFAULT_DB_PATH)))
 _conn: duckdb.DuckDBPyConnection | None = None
 
 def get_db() -> duckdb.DuckDBPyConnection:
     global _conn
     if _conn is None:
+        _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         _conn = duckdb.connect(str(_DB_PATH))
     return _conn
 ```
+
+> `QUANT_DB_PATH` 环境变量允许在不同机器（或 Elements 未挂载时临时切换到系统盘）覆盖默认路径，
+> 与 `settings.py` 中 `TDX_VIPDOC_DIR` 的处理方式一致。
 
 ### schema.py
 
@@ -333,6 +341,18 @@ def test_load_kline_since_filter(db):
 def test_meta_repo_get_last_date_returns_none_when_empty(db):
     ...
 ```
+
+---
+
+## config/settings.py 变更
+
+在现有 `settings.py` 中新增一行（与 `TDX_VIPDOC_DIR` 紧邻）：
+
+```python
+DB_PATH = Path(os.getenv("QUANT_DB_PATH", "/Volumes/Elements/5、投资/quant_trading/quant.duckdb"))
+```
+
+`connection.py` 从 `config.settings` 导入 `DB_PATH`，不重复读取环境变量。
 
 ---
 
