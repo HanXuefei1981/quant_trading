@@ -1,10 +1,13 @@
 """FeatureRepo：预计算特征表（features）读写"""
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import duckdb
 import pandas as pd
+
+_SAFE_COL = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 
 class FeatureRepo:
@@ -20,11 +23,24 @@ class FeatureRepo:
         existing = {row[0] for row in self._conn.execute("DESCRIBE features").fetchall()}
         for col in df.columns:
             if col not in existing:
+                if not _SAFE_COL.match(col):
+                    raise ValueError(f"Unsafe column name rejected: {col!r}")
                 dtype = "INTEGER" if col == "label" else "DOUBLE"
                 self._conn.execute(f'ALTER TABLE features ADD COLUMN "{col}" {dtype}')
         self._conn.register("_feat_tmp", df)
         cols = ", ".join(f'"{c}"' for c in df.columns)
-        self._conn.execute(f"INSERT OR REPLACE INTO features SELECT {cols} FROM _feat_tmp")
+        non_pk = [c for c in df.columns if c not in ("date", "code")]
+        if non_pk:
+            assignments = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in non_pk)
+            self._conn.execute(
+                f"INSERT INTO features ({cols}) SELECT {cols} FROM _feat_tmp "
+                f"ON CONFLICT (date, code) DO UPDATE SET {assignments}"
+            )
+        else:
+            self._conn.execute(
+                f"INSERT INTO features ({cols}) SELECT {cols} FROM _feat_tmp "
+                f"ON CONFLICT (date, code) DO NOTHING"
+            )
         self._conn.unregister("_feat_tmp")
         return len(df)
 
