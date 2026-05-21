@@ -69,5 +69,6 @@ class FeatureRepo:
         if row is None or row[0] is None:
             return None
         d_min, d_max = row
-        to_date = lambda v: v if isinstance(v, date) else v.date()
+        def to_date(v):
+            return v if isinstance(v, date) else v.date()
         return (to_date(d_min), to_date(d_max))
