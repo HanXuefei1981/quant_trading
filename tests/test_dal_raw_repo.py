@@ -106,3 +106,141 @@ def test_northbound_deduplication(repo):
     result = repo.load_northbound()
     assert len(result) == 1
     assert float(result.iloc[0]["north_net_inflow"]) == 99.9
+
+
+# ── fundamentals ──────────────────────────────────────────────────────────────
+
+def _fundamentals_df(code: str = "000001") -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+        "code": code,
+        "pe_ttm": [12.5, 12.8],
+        "pe_static": [13.0, 13.2],
+        "pb": [1.2, 1.25],
+        "ps": [2.0, 2.1],
+        "pcf": [8.0, 8.2],
+        "peg": [0.9, 0.92],
+        "market_cap": [2e11, 2.1e11],
+        "float_market_cap": [1.9e11, 2.0e11],
+        "total_shares": [int(1.7e10)] * 2,
+        "float_shares": [int(1.65e10)] * 2,
+    })
+
+
+def test_upsert_and_load_fundamentals(repo):
+    repo.upsert_fundamentals(_fundamentals_df())
+    result = repo.load_fundamentals("000001")
+    assert len(result) == 2
+    assert "pe_ttm" in result.columns
+
+
+def test_fundamentals_deduplication(repo):
+    df1 = _fundamentals_df().iloc[:1].copy()
+    df1["pe_ttm"] = 10.0
+    df2 = _fundamentals_df().iloc[:1].copy()
+    df2["pe_ttm"] = 20.0
+    repo.upsert_fundamentals(df1)
+    repo.upsert_fundamentals(df2)
+    assert float(repo.load_fundamentals("000001").iloc[0]["pe_ttm"]) == 20.0
+
+
+# ── fund_flow ─────────────────────────────────────────────────────────────────
+
+def _fund_flow_df(code: str = "000001") -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+        "code": code,
+        "major_net_inflow": [1e7, -5e6],
+        "major_net_pct": [2.5, -1.3],
+    })
+
+
+def test_upsert_and_load_fund_flow(repo):
+    repo.upsert_fund_flow(_fund_flow_df())
+    result = repo.load_fund_flow("000001")
+    assert len(result) == 2
+    assert "major_net_inflow" in result.columns
+
+
+# ── lhb ───────────────────────────────────────────────────────────────────────
+
+def _lhb_df() -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-03"]),
+        "code": ["000001", "000001", "000002"],
+        "lhb_net_buy": [1e7, -3e6, 5e6],
+        "lhb_buy_amount": [2e7, 1e7, 8e6],
+        "lhb_sell_amount": [1e7, 1.3e7, 3e6],
+    })
+
+
+def test_upsert_and_load_lhb(repo):
+    repo.upsert_lhb(_lhb_df())
+    result = repo.load_lhb("000001")
+    assert len(result) == 2
+
+
+def test_load_lhb_since_filter(repo):
+    repo.upsert_lhb(_lhb_df())
+    result = repo.load_lhb("000001", since=date(2024, 1, 2))
+    assert len(result) == 1  # 只返回 2024-01-03
+
+
+# ── reports ───────────────────────────────────────────────────────────────────
+
+def _reports_df(code: str = "000001") -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03"]),
+        "code": code,
+        "institution": ["机构A", "机构B", "机构A"],
+        "rating": ["买入", "增持", "买入"],
+    })
+
+
+def test_upsert_and_load_reports(repo):
+    repo.upsert_reports(_reports_df())
+    result = repo.load_reports("000001")
+    assert len(result) == 3
+
+
+def test_reports_three_column_pk_dedup(repo):
+    df1 = _reports_df().iloc[:1].copy()
+    df1["rating"] = "买入"
+    df2 = _reports_df().iloc[:1].copy()
+    df2["rating"] = "卖出"
+    repo.upsert_reports(df1)
+    repo.upsert_reports(df2)
+    result = repo.load_reports("000001")
+    assert len(result) == 1
+    assert result.iloc[0]["rating"] == "卖出"
+
+
+# ── eps_snapshot ──────────────────────────────────────────────────────────────
+
+def _eps_df(code: str = "000001") -> pd.DataFrame:
+    return pd.DataFrame({
+        "snapshot_date": pd.to_datetime(["2024-04-30", "2024-05-31"]),
+        "code": code,
+        "eps_cur": [2.10, 2.17],
+        "eps_next": [2.20, 2.24],
+        "analyst_count": [18, 20],
+    })
+
+
+def test_upsert_and_load_eps_snapshots(repo):
+    repo.upsert_eps_snapshot(_eps_df())
+    result = repo.load_eps_snapshots("000001")
+    assert len(result) == 2
+    assert "eps_cur" in result.columns
+
+
+def test_eps_snapshot_deduplication(repo):
+    df1 = _eps_df().iloc[:1].copy()
+    df1["eps_cur"] = 2.00
+    df2 = _eps_df().iloc[:1].copy()
+    df2["eps_cur"] = 2.10
+    repo.upsert_eps_snapshot(df1)
+    repo.upsert_eps_snapshot(df2)
+    result = repo.load_eps_snapshots("000001")
+    assert len(result) == 1
+    assert float(result.iloc[0]["eps_cur"]) == 2.10
