@@ -139,3 +139,27 @@ class RawRepo:
         return self._conn.execute(
             "SELECT * FROM eps_snapshot WHERE code = ? ORDER BY snapshot_date", [code]
         ).df()
+
+    # ── fundamentals_snapshot ─────────────────────────────────────────────────
+
+    def upsert_fundamentals_snapshot(self, df: pd.DataFrame) -> int:
+        return self._insert_or_replace(
+            "fundamentals_snapshot",
+            ["date", "code", "pe_ttm", "pe_static", "pb",
+             "turnover_pct", "mcap_yi", "float_mcap_yi", "price"],
+            df,
+        )
+
+    def load_fundamentals_snapshot(
+        self, code: str, since: date | None = None
+    ) -> pd.DataFrame:
+        if since is not None:
+            return self._conn.execute(
+                "SELECT * FROM fundamentals_snapshot "
+                "WHERE code = ? AND date > ? ORDER BY date",
+                [code, since],
+            ).df()
+        return self._conn.execute(
+            "SELECT * FROM fundamentals_snapshot WHERE code = ? ORDER BY date",
+            [code],
+        ).df()

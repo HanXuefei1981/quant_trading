@@ -109,6 +109,21 @@ CREATE TABLE IF NOT EXISTS collect_log (
 )
 """
 
+_CREATE_FUNDAMENTALS_SNAPSHOT = """
+CREATE TABLE IF NOT EXISTS fundamentals_snapshot (
+    date             DATE    NOT NULL,
+    code             VARCHAR NOT NULL,
+    pe_ttm           DOUBLE,
+    pe_static        DOUBLE,
+    pb               DOUBLE,
+    turnover_pct     DOUBLE,
+    mcap_yi          DOUBLE,
+    float_mcap_yi    DOUBLE,
+    price            DOUBLE,
+    PRIMARY KEY (date, code)
+)
+"""
+
 _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_kline_code ON kline (code)",
     "CREATE INDEX IF NOT EXISTS idx_fundamentals_code ON fundamentals (code)",
@@ -118,6 +133,7 @@ _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_eps_code ON eps_snapshot (code)",
     "CREATE INDEX IF NOT EXISTS idx_features_date ON features (date)",
     "CREATE INDEX IF NOT EXISTS idx_features_code ON features (code)",
+    "CREATE INDEX IF NOT EXISTS idx_fundamentals_snapshot_code ON fundamentals_snapshot (code)",
 ]
 
 
@@ -129,6 +145,7 @@ def migrate(conn: duckdb.DuckDBPyConnection | None = None) -> None:
         _CREATE_KLINE, _CREATE_FUNDAMENTALS, _CREATE_FUND_FLOW,
         _CREATE_NORTHBOUND, _CREATE_LHB, _CREATE_REPORTS,
         _CREATE_EPS_SNAPSHOT, _CREATE_FEATURES, _CREATE_COLLECT_LOG,
+        _CREATE_FUNDAMENTALS_SNAPSHOT,
     ]:
         db.execute(sql)
     for idx_sql in _INDEXES:
