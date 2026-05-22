@@ -82,9 +82,6 @@ def fetch_fundamentals(code: str, use_cache: bool = True) -> Optional[pd.DataFra
         return None
 
     df = _normalize_fundamentals(raw)
-
-    FUNDAMENTALS_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(cache_path, index=False)
     return df
 
 

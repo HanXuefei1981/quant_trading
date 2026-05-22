@@ -116,8 +116,6 @@ def fetch_fund_flow(code: str, use_cache: bool = True) -> Optional[pd.DataFrame]
     df = _normalize_fund_flow(raw)
     if df is None or df.empty:
         return None
-
-    df.to_parquet(cache_path, index=False)
     return df
 
 
