@@ -35,7 +35,7 @@ class BaseCollector(ABC):
 
 | 粒度 | 采集器 | 写入表 | MetaRepo scope |
 |------|--------|--------|----------------|
-| 逐码（股票级） | TDX、Fundamental、FundFlow、Report、EPS、Tencent | kline / fundamentals / fund_flow / reports / eps_snapshot / tencent | `code`（如 `"000001"`） |
+| 逐码（股票级） | TDX、Fundamental、FundFlow、Report、EPS、Tencent | kline / fundamentals / fund_flow / reports / eps_snapshot / fundamentals_snapshot | `code`（如 `"000001"`） |
 | 市场级 | Northbound、LHB（Signal） | northbound / lhb | `"__market__"` |
 
 逐码采集器在 `collect()` 内循环各 `code`，为每个 code 调用 `meta_repo.get_last_date(table, code)` 确定增量起点，写入后调用 `meta_repo.set_last_date(table, code, last_date)`。
@@ -54,14 +54,14 @@ def __init__(self, raw_repo: RawRepo | None = None, meta_repo: MetaRepo | None =
 
 ---
 
-## tencent 表
+## fundamentals_snapshot 表
 
-TencentCollector 采集的字段（`pe_ttm, pe_static, pb, turnover_pct, mcap_yi, float_mcap_yi, price`）与现有 `fundamentals` 表不同，需要新建独立表。
+TencentCollector 采集的字段（`pe_ttm, pe_static, pb, turnover_pct, mcap_yi, float_mcap_yi, price`）是对 `fundamentals` 表的实时补充——`fundamentals` 存储 akshare 历史序列，`fundamentals_snapshot` 存储腾讯财经的每日快照。两张表语义对应，命名对齐。
 
 ### Schema
 
 ```sql
-CREATE TABLE IF NOT EXISTS tencent (
+CREATE TABLE IF NOT EXISTS fundamentals_snapshot (
     date             DATE    NOT NULL,
     code             VARCHAR NOT NULL,
     pe_ttm           DOUBLE,
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS tencent (
 
 `schema.py` 的 `migrate()` 函数需新增此表的 `CREATE TABLE IF NOT EXISTS` 语句。
 
-`RawRepo` 需新增 `upsert_tencent(df) -> int` 和 `load_tencent(code, since=None) -> pd.DataFrame`。
+`RawRepo` 需新增 `upsert_fundamentals_snapshot(df) -> int` 和 `load_fundamentals_snapshot(code, since=None) -> pd.DataFrame`。
 
 ---
 
@@ -97,8 +97,8 @@ CREATE TABLE IF NOT EXISTS tencent (
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `src/dal/schema.py` | 修改 | 新增 `tencent` 表 DDL |
-| `src/dal/raw_repo.py` | 修改 | 新增 `upsert_tencent` / `load_tencent` |
+| `src/dal/schema.py` | 修改 | 新增 `fundamentals_snapshot` 表 DDL |
+| `src/dal/raw_repo.py` | 修改 | 新增 `upsert_fundamentals_snapshot` / `load_fundamentals_snapshot` |
 | `src/collectors/base.py` | 修改 | 移除旧接口，仅保留 `collect()` 抽象方法 |
 | `src/collectors/tdx_collector.py` | 修改 | 实现 `collect()`，写 `RawRepo.upsert_kline` |
 | `src/collectors/fundamental_collector.py` | 修改 | 实现 `collect()`，写 `RawRepo.upsert_fundamentals` |
@@ -106,10 +106,10 @@ CREATE TABLE IF NOT EXISTS tencent (
 | `src/collectors/northbound_collector.py` | 修改 | 实现 `collect()`，写 `RawRepo.upsert_northbound` |
 | `src/collectors/signal_collector.py` | 修改 | 实现 `collect()`，写 `RawRepo.upsert_lhb` |
 | `src/collectors/report_collector.py` | 修改 | 实现 `collect()`，写 `RawRepo.upsert_reports` + `upsert_eps_snapshot` |
-| `src/collectors/tencent_collector.py` | 修改 | 实现 `collect()`，写 `RawRepo.upsert_tencent` |
+| `src/collectors/tencent_collector.py` | 修改 | 实现 `collect()`，写 `RawRepo.upsert_fundamentals_snapshot` |
 | `src/data/fundamentals.py` | 修改 | 移除 `fetch_fundamentals()` 内的 Parquet 写入 |
 | `src/data/fund_flow.py` | 修改 | 移除 `fetch_fund_flow()` 内的 Parquet 写入 |
-| `tests/test_dal_raw_repo_tencent.py` | 新建 | tencent 表单元测试 |
+| `tests/test_dal_raw_repo_fundamentals_snapshot.py` | 新建 | fundamentals_snapshot 表单元测试 |
 | `tests/test_collector_tdx.py` | 新建 | TDX 采集器测试 |
 | `tests/test_collector_fundamental.py` | 新建 | Fundamental 采集器测试 |
 | `tests/test_collector_fund_flow.py` | 新建 | FundFlow 采集器测试 |
@@ -128,4 +128,4 @@ CREATE TABLE IF NOT EXISTS tencent (
   1. 首次全量采集：MetaRepo 无历史，`since=None` → 写入所有行，MetaRepo 更新。
   2. 增量采集：MetaRepo 有历史日期 → 只拉取并写入新数据，旧数据不重复。
   3. 网络失败：mock 抛出异常 → `stats.fail` 正确计数，MetaRepo 不更新。
-- **tencent 表 DAL 测试** 与其余表测试风格一致（upsert + load + date range）。
+- **fundamentals_snapshot 表 DAL 测试** 与其余表测试风格一致（upsert + load + date range）。
