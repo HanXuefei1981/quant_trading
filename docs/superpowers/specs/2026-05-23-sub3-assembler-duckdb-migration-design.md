@@ -22,32 +22,53 @@ Sub-3 完成闭环：将特征工程层的读写路径也全部迁移到 DuckDB�
 - `watermark.py` 文件本身：只移除 `"features"` 键的使用，不删除文件（其他键可能仍在用）
 - `src/models/trainer.py`：trainer 通过 `main.py` 接收传参，不直接读 Parquet，无需改动
 
-## 增量数据更新逻辑
+## 数据更新模式：全量 + 每日增量
 
-系统每日运行时：
+系统所有 DuckDB 表统一遵循「首次全量、此后每日增量」模式：
+
+| 表 | Collector 写入 | 增量判断依据 | load 方法 since 支持 |
+|---|---|---|---|
+| kline | TdxCollector，per code watermark | MetaRepo kline/{code} | ✅ `load_kline(code, since)` |
+| northbound | NorthboundCollector，market watermark | MetaRepo northbound/\_\_market\_\_ | ✅ `load_northbound(since)` |
+| lhb | SignalCollector，market watermark | MetaRepo lhb/\_\_market\_\_ | ✅ `load_all_lhb(since)`（B1 新增）|
+| fundamentals | FundamentalCollector，per code watermark | MetaRepo fundamentals/{code} | ✅ `load_fundamentals(code, since)`（B1 新增）|
+| fund_flow | FundFlowCollector，per code watermark | MetaRepo fund_flow/{code} | ✅ `load_fund_flow(code, since)`（B1 新增）|
+| reports | ReportCollector，per code watermark | MetaRepo reports/{code} | ✅ `load_reports(code, since)`（B1 新增）|
+| eps_snapshot | ReportCollector，per code watermark | MetaRepo eps_snapshot/{code} | ✅ `load_eps_snapshots(code, since)`（B1 新增）|
+| fundamentals_snapshot | TencentCollector，每日快照 | MetaRepo fundamentals_snapshot/{code} | ✅ 已有 since（assembler 不使用此表）|
+| **features** | assembler，market watermark | MetaRepo features/\_\_market\_\_ | FeatureRepo.load_features(date_from, date_to) |
+
+assembler 增量模式读取所有表时，统一使用 `since=lookback_date`（`last_feature_date - 300天`），确保滚动窗口指标有足够历史，同时避免读取无关历史数据：
 
 ```
-第一次全量：
+全量（首次运行）：
   MetaRepo.get_last_date("features", "__market__") → None
-  → 触发 assemble()（全量），从 RawRepo 读所有历史数据
+  → assemble()：所有 RawRepo 读取均不传 since（加载全部历史）
   → FeatureRepo.upsert_features(combined)
   → MetaRepo.set_last_date("features", "__market__", max_date)
 
-第 N 次增量（每日）：
+每日增量：
   MetaRepo.get_last_date("features", "__market__") → last_date（如 2026-05-20）
-  → RawRepo.load_kline(code, since=lookback_date)   # lookback = last_date - 300天
+  lookback_date = last_date - 300天
+  → load_kline(code, since=lookback_date)
+  → load_fundamentals(code, since=lookback_date)
+  → load_fund_flow(code, since=lookback_date)
+  → load_northbound(since=lookback_date)
+  → load_all_lhb(since=lookback_date)
+  → load_reports(code, since=lookback_date)        # 由 report.py 内部调用
+  → load_eps_snapshots(code, since=lookback_date)  # 由 report.py 内部调用
   → 计算特征，过滤出 date > last_date 的新行
-  → FeatureRepo.upsert_features(new_rows)            # ON CONFLICT 幂等
+  → FeatureRepo.upsert_features(new_rows)           # ON CONFLICT 幂等
   → MetaRepo.set_last_date("features", "__market__", new_max_date)
 ```
 
 ## 任务分解（B1 → B2 → B3 → B4 → B5 → B6）
 
-### B1：RawRepo.load_all_lhb()
+### B1：RawRepo — 补齐 since 参数 + load_all_lhb
 
 **文件**：`src/dal/raw_repo.py`
 
-**变更**：新增方法
+**变更 1 — 新增 `load_all_lhb`**：
 
 ```python
 def load_all_lhb(self, since: date | None = None) -> pd.DataFrame:
@@ -61,12 +82,55 @@ def load_all_lhb(self, since: date | None = None) -> pd.DataFrame:
     ).df()
 ```
 
-**原因**：`signal.py` 的 `_add_lhb_features()` 需要全市场 lhb DataFrame，现有 `load_lhb(code)` 只支持单股。
+原因：`signal.py` 的 `_add_lhb_features()` 需要全市场 lhb DataFrame，现有 `load_lhb(code)` 只支持单股。
+
+**变更 2 — 补齐 since 参数（4 个方法）**：
+
+```python
+def load_fundamentals(self, code: str, since: date | None = None) -> pd.DataFrame:
+    if since is not None:
+        return self._conn.execute(
+            "SELECT * FROM fundamentals WHERE code = ? AND date > ? ORDER BY date",
+            [code, since],
+        ).df()
+    return self._conn.execute(
+        "SELECT * FROM fundamentals WHERE code = ? ORDER BY date", [code]
+    ).df()
+
+def load_fund_flow(self, code: str, since: date | None = None) -> pd.DataFrame:
+    if since is not None:
+        return self._conn.execute(
+            "SELECT * FROM fund_flow WHERE code = ? AND date > ? ORDER BY date",
+            [code, since],
+        ).df()
+    return self._conn.execute(
+        "SELECT * FROM fund_flow WHERE code = ? ORDER BY date", [code]
+    ).df()
+
+def load_reports(self, code: str, since: date | None = None) -> pd.DataFrame:
+    if since is not None:
+        return self._conn.execute(
+            "SELECT * FROM reports WHERE code = ? AND date > ? ORDER BY date",
+            [code, since],
+        ).df()
+    return self._conn.execute(
+        "SELECT * FROM reports WHERE code = ? ORDER BY date", [code]
+    ).df()
+
+def load_eps_snapshots(self, code: str, since: date | None = None) -> pd.DataFrame:
+    if since is not None:
+        return self._conn.execute(
+            "SELECT * FROM eps_snapshot WHERE code = ? AND snapshot_date > ? ORDER BY snapshot_date",
+            [code, since],
+        ).df()
+    return self._conn.execute(
+        "SELECT * FROM eps_snapshot WHERE code = ? ORDER BY snapshot_date", [code]
+    ).df()
+```
 
 **测试**：
-- 空表返回空 DataFrame（columns 保持正确）
-- 有数据时按 date/code 排序返回
-- `since` 参数正确过滤（只返回 date > since 的行）
+- 每个方法：`since=None` 返回全部数据；`since=某日期` 只返回该日期之后的行
+- `load_all_lhb`：空表返回空 DataFrame；有数据时按 date/code 排序；since 参数正确过滤
 
 ---
 
@@ -97,15 +161,17 @@ def assemble_inference(
 
 `None` 时各自在函数内部通过 `get_db()` 创建，共享同一个连接。
 
-**5 个私有函数替换**：
+**5 个私有函数替换（全量模式 since=None，增量模式 since=lookback_date）**：
 
-| 旧实现 | 新实现 |
-|--------|--------|
-| `pd.read_parquet(KLINE_DIR / f"{code}.parquet")` | `raw_repo.load_kline(code)` |
-| `_load_fundamentals(code)` 读 Parquet | `raw_repo.load_fundamentals(code)` |
-| `_load_fund_flow(code)` 读 Parquet | `raw_repo.load_fund_flow(code)` |
-| `_load_northbound()` 读 Parquet | `raw_repo.load_northbound()` |
-| `_load_lhb_all()` glob + concat | `raw_repo.load_all_lhb()` |
+| 旧实现 | 新实现（全量） | 新实现（增量，since=lookback_date）|
+|--------|--------|--------|
+| `pd.read_parquet(KLINE_DIR / f"{code}.parquet")` | `raw_repo.load_kline(code)` | `raw_repo.load_kline(code, since=lookback_date)` |
+| `_load_fundamentals(code)` 读 Parquet | `raw_repo.load_fundamentals(code)` | `raw_repo.load_fundamentals(code, since=lookback_date)` |
+| `_load_fund_flow(code)` 读 Parquet | `raw_repo.load_fund_flow(code)` | `raw_repo.load_fund_flow(code, since=lookback_date)` |
+| `_load_northbound()` 读 Parquet | `raw_repo.load_northbound()` | `raw_repo.load_northbound(since=lookback_date)` |
+| `_load_lhb_all()` glob + concat | `raw_repo.load_all_lhb()` | `raw_repo.load_all_lhb(since=lookback_date)` |
+
+所有 5 个数据源在增量模式下统一传 `since=lookback_date`（`last_feature_date - 300天`），全量模式传 `since=None`。
 
 **`_get_kline_codes()` 替换**：
 
@@ -116,7 +182,7 @@ def _get_kline_codes(raw_repo: RawRepo) -> list[str]:
     ).fetchall()]
 ```
 
-**增量路径优化**：利用 `load_kline(code, since=lookback_date)` 的 `WHERE date > ?` 过滤，省去文件级别 max-date 检查。增量模式下 `load_all_lhb(since=lookback_date)` 同样传入 lookback_date 以减少数据量。
+**增量路径优化**：`load_kline(code, since=lookback_date)` 的 `WHERE date > ?` 直接在 DuckDB 层过滤，省去文件级别 max-date 检查。其余 4 张表同样受益于 since 过滤，避免加载无关历史数据。
 
 **删除**：
 - 常量 `KLINE_DIR`、`FUNDAMENTALS_DIR`、`FUND_FLOW_DIR`、`NORTHBOUND_PATH`、`LHB_DIR`
@@ -144,23 +210,25 @@ def add_report_features(
 ) -> pd.DataFrame: ...
 ```
 
-**两个私有函数替换**：
+**两个私有函数替换（均接收 since 参数，全量 None，增量传 lookback_date）**：
 
 ```python
-def _load_reports(code: str, raw_repo: RawRepo) -> pd.DataFrame | None:
-    df = raw_repo.load_reports(code)
+def _load_reports(code: str, raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame | None:
+    df = raw_repo.load_reports(code, since=since)
     if df.empty:
         return None
     df["date"] = pd.to_datetime(df["date"])
     return df
 
-def _load_eps(code: str, raw_repo: RawRepo) -> pd.DataFrame | None:
-    df = raw_repo.load_eps_snapshots(code)   # 返回 snapshot_date 列，与现有逻辑一致
+def _load_eps(code: str, raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame | None:
+    df = raw_repo.load_eps_snapshots(code, since=since)   # 返回 snapshot_date 列，与现有逻辑一致
     if df.empty:
         return None
     df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
     return df.sort_values("snapshot_date").reset_index(drop=True)
 ```
+
+`add_report_features()` 也对应添加 `since: date | None = None` 参数并透传给两个私有函数。全量模式传 `None`，增量模式由 `assembler.py` 传入 `lookback_date`。
 
 **删除**：`base_dir` 参数及其默认值逻辑、`from config.settings import DATA_DIR` 的懒加载、`Path` 相关导入。
 
