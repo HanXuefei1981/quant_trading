@@ -59,6 +59,9 @@ class ReportCollector(BaseCollector):
             return None
         cols_needed = [c for c in _REPORT_COL_MAP if c in raw.columns]
         df = raw[cols_needed].rename(columns=_REPORT_COL_MAP).copy()
+        if "date" not in df.columns:
+            logger.warning("研报数据缺少日期列 %s，跳过", code)
+            return None
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         df["code"] = code
         df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
@@ -76,7 +79,8 @@ class ReportCollector(BaseCollector):
         rows = raw.sort_values("年度").reset_index(drop=True)
         eps_cur = rows["均值"].iloc[0] if len(rows) >= 1 else float("nan")
         eps_next = rows["均值"].iloc[1] if len(rows) >= 2 else float("nan")
-        analyst_count = int(rows["预测机构数"].iloc[0]) if len(rows) >= 1 else 0
+        raw_val = rows["预测机构数"].iloc[0] if len(rows) >= 1 else None
+        analyst_count = int(raw_val) if pd.notna(raw_val) else 0
         return pd.DataFrame([{
             "snapshot_date": today,
             "code": code,
