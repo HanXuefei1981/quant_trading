@@ -116,7 +116,7 @@ def _get_kline_codes(raw_repo: RawRepo) -> list[str]:
     ).fetchall()]
 ```
 
-**增量路径优化**：利用 `load_kline(code, since=lookback_date)` 的 `WHERE date > ?` 过滤，省去文件级别 max-date 检查。
+**增量路径优化**：利用 `load_kline(code, since=lookback_date)` 的 `WHERE date > ?` 过滤，省去文件级别 max-date 检查。增量模式下 `load_all_lhb(since=lookback_date)` 同样传入 lookback_date 以减少数据量。
 
 **删除**：
 - 常量 `KLINE_DIR`、`FUNDAMENTALS_DIR`、`FUND_FLOW_DIR`、`NORTHBOUND_PATH`、`LHB_DIR`
@@ -231,12 +231,16 @@ since = meta_repo.get_last_date("features", "__market__")  # None = 首次运行
 meta_repo.set_last_date("features", "__market__", new_max_date, row_count=len(combined))
 ```
 
-**`assemble_incremental()` 首次运行处理**：
+**`assemble_incremental()` 首次运行处理**（注意：全量完成后必须写水位再返回）：
 ```python
 since = meta_repo.get_last_date("features", "__market__")
 if since is None:
     logger.info("features 水位为空，执行全量组装")
-    return assemble(raw_repo=raw_repo, feature_repo=feature_repo)
+    result = assemble(raw_repo=raw_repo, feature_repo=feature_repo)
+    if not result.empty:
+        new_max = result["date"].max().date()
+        meta_repo.set_last_date("features", "__market__", new_max, row_count=len(result))
+    return result
 ```
 
 **`watermark.py` 改动**：移除 `"features"` 键及其注释。文件本身保留。
