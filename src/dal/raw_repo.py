@@ -74,7 +74,12 @@ class RawRepo:
             df,
         )
 
-    def load_fundamentals(self, code: str) -> pd.DataFrame:
+    def load_fundamentals(self, code: str, since: date | None = None) -> pd.DataFrame:
+        if since is not None:
+            return self._conn.execute(
+                "SELECT * FROM fundamentals WHERE code = ? AND date > ? ORDER BY date",
+                [code, since],
+            ).df()
         return self._conn.execute(
             "SELECT * FROM fundamentals WHERE code = ? ORDER BY date", [code]
         ).df()
@@ -88,7 +93,12 @@ class RawRepo:
             df,
         )
 
-    def load_fund_flow(self, code: str) -> pd.DataFrame:
+    def load_fund_flow(self, code: str, since: date | None = None) -> pd.DataFrame:
+        if since is not None:
+            return self._conn.execute(
+                "SELECT * FROM fund_flow WHERE code = ? AND date > ? ORDER BY date",
+                [code, since],
+            ).df()
         return self._conn.execute(
             "SELECT * FROM fund_flow WHERE code = ? ORDER BY date", [code]
         ).df()
@@ -112,6 +122,16 @@ class RawRepo:
             "SELECT * FROM lhb WHERE code = ? ORDER BY date", [code]
         ).df()
 
+    def load_all_lhb(self, since: date | None = None) -> pd.DataFrame:
+        """全市场龙虎榜，供 assembler 一次性加载后按 code 过滤。"""
+        if since is not None:
+            return self._conn.execute(
+                "SELECT * FROM lhb WHERE date > ? ORDER BY date, code", [since]
+            ).df()
+        return self._conn.execute(
+            "SELECT * FROM lhb ORDER BY date, code"
+        ).df()
+
     # ── reports ───────────────────────────────────────────────────────────────
 
     def upsert_reports(self, df: pd.DataFrame) -> int:
@@ -121,7 +141,12 @@ class RawRepo:
             df,
         )
 
-    def load_reports(self, code: str) -> pd.DataFrame:
+    def load_reports(self, code: str, since: date | None = None) -> pd.DataFrame:
+        if since is not None:
+            return self._conn.execute(
+                "SELECT * FROM reports WHERE code = ? AND date > ? ORDER BY date",
+                [code, since],
+            ).df()
         return self._conn.execute(
             "SELECT * FROM reports WHERE code = ? ORDER BY date", [code]
         ).df()
@@ -135,7 +160,12 @@ class RawRepo:
             df,
         )
 
-    def load_eps_snapshots(self, code: str) -> pd.DataFrame:
+    def load_eps_snapshots(self, code: str, since: date | None = None) -> pd.DataFrame:
+        if since is not None:
+            return self._conn.execute(
+                "SELECT * FROM eps_snapshot WHERE code = ? AND snapshot_date > ? ORDER BY snapshot_date",
+                [code, since],
+            ).df()
         return self._conn.execute(
             "SELECT * FROM eps_snapshot WHERE code = ? ORDER BY snapshot_date", [code]
         ).df()

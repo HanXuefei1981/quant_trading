@@ -244,3 +244,115 @@ def test_eps_snapshot_deduplication(repo):
     result = repo.load_eps_snapshots("000001")
     assert len(result) == 1
     assert float(result.iloc[0]["eps_cur"]) == 2.10
+
+
+# ── load_fundamentals with since ───────────────────────────────────────────────
+
+def _fund_df(code: str = "000001") -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-03-01"]),
+        "code": code,
+        "pe_ttm": [10.0, 11.0], "pe_static": [9.0, 9.5],
+        "pb": [2.0, 2.1], "ps": [1.5, 1.6], "pcf": [8.0, 8.5],
+        "peg": [0.5, 0.6], "market_cap": [1000.0, 1100.0],
+        "float_market_cap": [800.0, 850.0],
+        "total_shares": [10000.0, 10000.0], "float_shares": [8000.0, 8000.0],
+    })
+
+def test_load_fundamentals_no_since_returns_all(repo):
+    repo.upsert_fundamentals(_fund_df())
+    assert len(repo.load_fundamentals("000001")) == 2
+
+def test_load_fundamentals_since_filters_rows(repo):
+    repo.upsert_fundamentals(_fund_df())
+    result = repo.load_fundamentals("000001", since=date(2024, 1, 2))
+    assert len(result) == 1
+    assert pd.to_datetime(result["date"].iloc[0]).date() == date(2024, 3, 1)
+
+# ── load_fund_flow with since ──────────────────────────────────────────────────
+
+def _flow_df(code: str = "000001") -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-03-01"]),
+        "code": code,
+        "major_net_inflow": [1e6, 2e6],
+        "major_net_pct": [1.5, 2.5],
+    })
+
+def test_load_fund_flow_no_since_returns_all(repo):
+    repo.upsert_fund_flow(_flow_df())
+    assert len(repo.load_fund_flow("000001")) == 2
+
+def test_load_fund_flow_since_filters_rows(repo):
+    repo.upsert_fund_flow(_flow_df())
+    result = repo.load_fund_flow("000001", since=date(2024, 1, 2))
+    assert len(result) == 1
+    assert pd.to_datetime(result["date"].iloc[0]).date() == date(2024, 3, 1)
+
+# ── load_reports with since ────────────────────────────────────────────────────
+
+def _reports_since_df(code: str = "000001") -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-03-01"]),
+        "code": code,
+        "institution": ["国信证券", "招商证券"],
+        "rating": ["买入", "中性"],
+    })
+
+def test_load_reports_no_since_returns_all(repo):
+    repo.upsert_reports(_reports_since_df())
+    assert len(repo.load_reports("000001")) == 2
+
+def test_load_reports_since_filters_rows(repo):
+    repo.upsert_reports(_reports_since_df())
+    result = repo.load_reports("000001", since=date(2024, 1, 2))
+    assert len(result) == 1
+
+# ── load_eps_snapshots with since ─────────────────────────────────────────────
+
+def _eps_since_df(code: str = "000001") -> pd.DataFrame:
+    return pd.DataFrame({
+        "snapshot_date": pd.to_datetime(["2024-01-02", "2024-03-01"]),
+        "code": code,
+        "eps_cur": [1.0, 1.2],
+        "eps_next": [1.1, 1.3],
+        "analyst_count": [5, 6],
+    })
+
+def test_load_eps_snapshots_no_since_returns_all(repo):
+    repo.upsert_eps_snapshot(_eps_since_df())
+    assert len(repo.load_eps_snapshots("000001")) == 2
+
+def test_load_eps_snapshots_since_filters_rows(repo):
+    repo.upsert_eps_snapshot(_eps_since_df())
+    result = repo.load_eps_snapshots("000001", since=date(2024, 1, 2))
+    assert len(result) == 1
+    assert pd.to_datetime(result["snapshot_date"].iloc[0]).date() == date(2024, 3, 1)
+
+# ── load_all_lhb ──────────────────────────────────────────────────────────────
+
+def _all_lhb_df() -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-03-01"]),
+        "code": ["000001", "000002", "000001"],
+        "lhb_net_buy": [1e6, 2e6, 3e6],
+        "lhb_buy_amount": [5e6, 6e6, 7e6],
+        "lhb_sell_amount": [4e6, 4e6, 4e6],
+    })
+
+def test_load_all_lhb_returns_all_codes(repo):
+    repo.upsert_lhb(_all_lhb_df())
+    result = repo.load_all_lhb()
+    assert len(result) == 3
+    assert set(result["code"].tolist()) == {"000001", "000002"}
+
+def test_load_all_lhb_since_filters(repo):
+    repo.upsert_lhb(_all_lhb_df())
+    result = repo.load_all_lhb(since=date(2024, 1, 2))
+    assert len(result) == 1
+    assert pd.to_datetime(result["date"].iloc[0]).date() == date(2024, 3, 1)
+
+def test_load_all_lhb_empty_table(repo):
+    result = repo.load_all_lhb()
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
