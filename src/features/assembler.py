@@ -22,6 +22,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from config.settings import PROCESSED_DIR, MIN_TRADE_DAYS
+from src.dal.raw_repo import RawRepo
+from src.dal.feature_repo import FeatureRepo
 from src.features.indicators import add_all_features, get_feature_columns
 from src.features.label import add_cross_sectional_label
 from src.features.preprocessing import preprocess_features
@@ -37,14 +39,14 @@ _FUND_VALUE_COLS = [
 _FLOW_COLS = ["major_net_inflow", "major_net_pct"]
 
 
-def _get_kline_codes(raw_repo) -> list[str]:
+def _get_kline_codes(raw_repo: RawRepo) -> list[str]:
     """返回 DuckDB kline 表中所有已缓存的股票代码（去重排序）。"""
     return [r[0] for r in raw_repo._conn.execute(
         "SELECT DISTINCT code FROM kline ORDER BY code"
     ).fetchall()]
 
 
-def _load_fundamentals(code: str, raw_repo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_fundamentals(code: str, raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
     """加载基本面数据（从 DuckDB RawRepo）。"""
     df = raw_repo.load_fundamentals(code, since=since)
     if df.empty:
@@ -53,7 +55,7 @@ def _load_fundamentals(code: str, raw_repo, since: date | None = None) -> Option
     return df
 
 
-def _load_fund_flow(code: str, raw_repo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_fund_flow(code: str, raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
     """加载个股资金流向数据（从 DuckDB RawRepo）。"""
     df = raw_repo.load_fund_flow(code, since=since)
     if df.empty:
@@ -62,7 +64,7 @@ def _load_fund_flow(code: str, raw_repo, since: date | None = None) -> Optional[
     return df
 
 
-def _load_northbound(raw_repo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_northbound(raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
     """加载北向资金历史（从 DuckDB RawRepo）。"""
     df = raw_repo.load_northbound(since=since)
     if df.empty:
@@ -71,7 +73,7 @@ def _load_northbound(raw_repo, since: date | None = None) -> Optional[pd.DataFra
     return df.sort_values("date").reset_index(drop=True)
 
 
-def _load_lhb_all(raw_repo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_lhb_all(raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
     """加载全市场龙虎榜历史（从 DuckDB RawRepo）。"""
     df = raw_repo.load_all_lhb(since=since)
     if df.empty:
@@ -80,7 +82,7 @@ def _load_lhb_all(raw_repo, since: date | None = None) -> Optional[pd.DataFrame]
     return df.drop_duplicates(subset=["date", "code"]).sort_values("date")
 
 
-def _merge_fundamentals(kline: pd.DataFrame, code: str, raw_repo, since: date | None = None) -> pd.DataFrame:
+def _merge_fundamentals(kline: pd.DataFrame, code: str, raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame:
     """左连接基本面数据到 K 线，并计算换手率。"""
     fund_df = _load_fundamentals(code, raw_repo, since=since)
     if fund_df is None or fund_df.empty:
@@ -99,7 +101,7 @@ def _merge_fundamentals(kline: pd.DataFrame, code: str, raw_repo, since: date | 
     return merged
 
 
-def _merge_fund_flow(kline: pd.DataFrame, code: str, raw_repo, since: date | None = None) -> pd.DataFrame:
+def _merge_fund_flow(kline: pd.DataFrame, code: str, raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame:
     """左连接个股资金流向到 K 线。"""
     flow_df = _load_fund_flow(code, raw_repo, since=since)
     if flow_df is None or flow_df.empty:
@@ -201,7 +203,7 @@ def assemble(
 
         # 特征工程（北向资金由 add_signal_features 内部 merge，勿在此重复合并）
         df = add_all_features(raw)
-        df = add_report_features(df, code, raw_repo=raw_repo)
+        df = add_report_features(df, code)  # B3 将更新为 raw_repo 参数
         df = add_signal_features(df, code, lhb_df=lhb_df, north_df=north_df)
         df["code"] = code
         df.to_parquet(processed_path, index=False)  # B4 将迁移此写入路径
@@ -281,7 +283,6 @@ def assemble_incremental(
 
     since_ts = pd.Timestamp(since)
     lookback_date = since - timedelta(days=300)
-    lookback_ts = pd.Timestamp(lookback_date)
 
     logger.info(f"增量模式：处理 date > {since} 的新数据（回看窗口起点: {lookback_date}）")
 
@@ -319,7 +320,7 @@ def assemble_incremental(
         raw = _merge_fund_flow(raw, code, raw_repo, since=lookback_date)
 
         df = add_all_features(raw)
-        df = add_report_features(df, code, raw_repo=raw_repo, since=lookback_date)
+        df = add_report_features(df, code)  # B3 将更新为 raw_repo=raw_repo, since=lookback_date
         df = add_signal_features(df, code, lhb_df=lhb_df, north_df=north_df)
         df["code"] = code
 
