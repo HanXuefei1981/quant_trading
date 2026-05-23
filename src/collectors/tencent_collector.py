@@ -27,6 +27,15 @@ _BATCH_SIZE = 80
 _TENCENT_URL = "https://qt.gtimg.cn/q="
 
 
+def _parse_field(vals: list[str], idx: int) -> float | None:
+    """从腾讯财经字段列表中安全解析指定索引的浮点值。"""
+    v = vals[idx] if idx < len(vals) else ""
+    try:
+        return float(v) if v else None
+    except ValueError:
+        return None
+
+
 def _get_prefix(code: str) -> str:
     if code.startswith(("6", "9")):
         return "sh"
@@ -58,21 +67,14 @@ def _fetch_batch(codes: list[str]) -> dict[str, dict]:
             continue
         code = key[2:]
 
-        def _f(idx: int) -> float | None:
-            v = vals[idx] if idx < len(vals) else ""
-            try:
-                return float(v) if v else None
-            except ValueError:
-                return None
-
         result[code] = {
-            "pe_ttm":        _f(39),
-            "pe_static":     _f(52),
-            "pb":            _f(46),
-            "turnover_pct":  _f(38),
-            "mcap_yi":       _f(44),
-            "float_mcap_yi": _f(45),
-            "price":         _f(3),
+            "pe_ttm":        _parse_field(vals, 39),
+            "pe_static":     _parse_field(vals, 52),
+            "pb":            _parse_field(vals, 46),
+            "turnover_pct":  _parse_field(vals, 38),
+            "mcap_yi":       _parse_field(vals, 44),
+            "float_mcap_yi": _parse_field(vals, 45),
+            "price":         _parse_field(vals, 3),
         }
     return result
 
@@ -106,13 +108,18 @@ class TencentCollector(BaseCollector):
         today = datetime.now().date()
         errors = 0
 
+        # 一次性查询今日已采集的 code，避免循环内 N+1 查询
+        today_str = today.isoformat()
+        rows_cached = self._meta_repo._conn.execute(
+            "SELECT scope FROM collect_log WHERE table_name = 'fundamentals_snapshot' AND last_date = ?",
+            [today_str],
+        ).fetchall()
+        cached_today: set[str] = {row[0] for row in rows_cached}
+
         for i in range(0, len(codes), _BATCH_SIZE):
             batch_codes = codes[i:i + _BATCH_SIZE]
 
-            all_cached = all(
-                self._meta_repo.get_last_date("fundamentals_snapshot", code) == today
-                for code in batch_codes
-            )
+            all_cached = all(code in cached_today for code in batch_codes)
             if all_cached:
                 stats.cached += len(batch_codes)
                 continue
@@ -142,6 +149,7 @@ class TencentCollector(BaseCollector):
                 self._raw_repo.upsert_fundamentals_snapshot(df)
                 for code in df["code"].tolist():
                     self._meta_repo.set_last_date("fundamentals_snapshot", code, today, 1)
+                    cached_today.add(code)  # 更新本地缓存，避免同次调用重复写入
                 stats.ok += len(batch_rows)
 
             if (i // _BATCH_SIZE + 1) % 10 == 0:
