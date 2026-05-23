@@ -1,20 +1,15 @@
-"""龙虎榜全市场日报采集器
+"""龙虎榜全市场日报采集器（DAL 版）"""
+from __future__ import annotations
 
-数据源：akshare.stock_lhb_detail_em(start_date, end_date)（东财，需关 VPN）
-落地路径：data/raw/lhb/YYYY-MM-DD.parquet
-
-列格式：date(datetime64), code(str), lhb_net_buy(float), lhb_buy_amount(float), lhb_sell_amount(float)
-"""
 import logging
-from datetime import date as date_type
-from datetime import datetime
-from pathlib import Path
-from typing import Optional
+from datetime import date, datetime
 
 import akshare as ak
 import pandas as pd
 
 from src.collectors.base import BaseCollector, CollectStats
+from src.dal.meta_repo import MetaRepo
+from src.dal.raw_repo import RawRepo
 
 logger = logging.getLogger(__name__)
 
@@ -29,40 +24,48 @@ _COL_MAP = {
 
 
 class SignalCollector(BaseCollector):
-    """龙虎榜全市场日报采集器（按日期粒度，非按股票粒度）。
+    """东财龙虎榜日报 → DuckDB lhb 表（市场级）。
 
     ⚠️ akshare.stock_lhb_detail_em 在 VPN 开启时有 SSL 错误，需关 VPN 后运行。
     """
 
-    def __init__(self, base_dir: Optional[Path] = None) -> None:
-        from config.settings import DATA_DIR
-        self._base = base_dir or (DATA_DIR / "raw")
-        self._lhb_dir = self._base / "lhb"
-        self._lhb_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(
+        self,
+        raw_repo: RawRepo | None = None,
+        meta_repo: MetaRepo | None = None,
+    ) -> None:
+        if raw_repo is None:
+            from src.dal.connection import get_db
+            conn = get_db()
+            raw_repo = RawRepo(conn)
+            if meta_repo is None:
+                meta_repo = MetaRepo(conn)
+        if meta_repo is None:
+            meta_repo = MetaRepo(raw_repo._conn)
+        self._raw_repo = raw_repo
+        self._meta_repo = meta_repo
 
-    def _fetch_daily(self, target_date: date_type) -> Optional[pd.DataFrame]:
-        """拉取单日全市场龙虎榜，返回标准化 DataFrame 或 None。"""
+    def _fetch_daily(self, target_date: date) -> pd.DataFrame | None:
         date_str = target_date.strftime("%Y%m%d")
         try:
             raw = ak.stock_lhb_detail_em(start_date=date_str, end_date=date_str)
         except Exception as exc:
-            logger.warning(f"龙虎榜拉取失败 {date_str}: {exc}")
+            logger.warning("龙虎榜拉取失败 %s: %s", date_str, exc)
             return None
 
         if raw is None or raw.empty:
             return None
 
-        cols_to_rename = {k: v for k, v in _COL_MAP.items() if k in raw.columns}
-        df = raw.rename(columns=cols_to_rename)
-
-        required = {"code", "lhb_net_buy"}
-        if not required.issubset(df.columns):
-            logger.warning(f"龙虎榜字段不全 {date_str}，已有列: {list(df.columns)}")
+        df = raw.rename(columns={k: v for k, v in _COL_MAP.items() if k in raw.columns})
+        if "code" not in df.columns:
+            logger.warning("龙虎榜字段不全 %s，已有列: %s", date_str, list(df.columns))
             return None
 
-        df["date"] = pd.to_datetime(target_date)
+        if "date" not in df.columns:
+            df["date"] = pd.to_datetime(target_date)
+
         df["code"] = df["code"].astype(str).str.zfill(6)
-        df["lhb_net_buy"] = pd.to_numeric(df["lhb_net_buy"], errors="coerce")
+        df["lhb_net_buy"] = pd.to_numeric(df.get("lhb_net_buy", 0), errors="coerce")
         df["lhb_buy_amount"] = pd.to_numeric(df.get("lhb_buy_amount", 0), errors="coerce")
         df["lhb_sell_amount"] = pd.to_numeric(df.get("lhb_sell_amount", 0), errors="coerce")
 
@@ -71,75 +74,23 @@ class SignalCollector(BaseCollector):
         df = df.dropna(subset=["code"]).drop_duplicates(subset=["code"])
         return df if not df.empty else None
 
-    def fetch_all(
-        self,
-        codes: list[str],
-        date: Optional[date_type] = None,
-        incremental: bool = True,
-        max_errors: int = 10,
-    ) -> CollectStats:
-        """拉取指定日期（默认今日）的全市场龙虎榜并落盘。codes 参数忽略。
-
-        注意：date 参数遮蔽了内置 date 类型，方法内部使用 date_type 别名引用类型。
-        """
+    def collect(self, codes: list[str] | None = None, since: date | None = None) -> CollectStats:
+        """拉取今日龙虎榜，写入 DAL lhb 表。codes 和 since 参数对市场级采集器均忽略。"""
         stats = CollectStats()
-        target = date if date is not None else datetime.today().date()
-        out_path = self._lhb_dir / f"{target.strftime('%Y-%m-%d')}.parquet"
+        today = datetime.now().date()
 
-        if incremental and out_path.exists():
+        last_date = self._meta_repo.get_last_date("lhb", "__market__")
+        if last_date is not None and last_date >= today:
             stats.cached += 1
             return stats
 
-        df = self._fetch_daily(target)
+        df = self._fetch_daily(today)
         if df is None:
             stats.fail += 1
             return stats
 
-        if out_path.exists():
-            existing = pd.read_parquet(out_path)
-            existing["date"] = pd.to_datetime(existing["date"])
-            df = pd.concat([existing, df], ignore_index=True)
-            df = df.drop_duplicates(subset=["date", "code"]).sort_values("date")
-
-        df.to_parquet(out_path, index=False)
+        self._raw_repo.upsert_lhb(df)
+        self._meta_repo.set_last_date("lhb", "__market__", today, len(df))
         stats.ok += 1
-        logger.info(f"龙虎榜 {target} 已保存：{len(df)} 只股票")
+        logger.info("龙虎榜 %s 已保存：%d 只股票", today, len(df))
         return stats
-
-    def fetch_one(self, code: str, since: Optional[date_type] = None) -> Optional[pd.DataFrame]:
-        """为满足 BaseCollector 接口，等同于拉取今日并返回该股记录。"""
-        target = datetime.today().date()
-        self.fetch_all(codes=[], date=target, incremental=True)
-        return self.load(code)
-
-    def load(self, code: str) -> Optional[pd.DataFrame]:
-        """从所有历史日期文件中聚合该股上榜记录。"""
-        parts = []
-        for p in sorted(self._lhb_dir.glob("*.parquet")):
-            try:
-                df = pd.read_parquet(p)
-                df["date"] = pd.to_datetime(df["date"])
-                sub = df[df["code"] == code]
-                if not sub.empty:
-                    parts.append(sub)
-            except Exception as exc:
-                logger.warning(f"读取龙虎榜文件 {p} 失败，已跳过: {exc}")
-                continue
-        if not parts:
-            return None
-        result = pd.concat(parts, ignore_index=True).sort_values("date").reset_index(drop=True)
-        return result if not result.empty else None
-
-    def load_market(self, date: Optional[date_type] = None) -> Optional[pd.DataFrame]:
-        """读取单日全市场龙虎榜文件。"""
-        target = date if date is not None else datetime.today().date()
-        path = self._lhb_dir / f"{target.strftime('%Y-%m-%d')}.parquet"
-        if not path.exists():
-            return None
-        try:
-            df = pd.read_parquet(path)
-            df["date"] = pd.to_datetime(df["date"])
-            return df
-        except Exception as exc:
-            logger.warning(f"读取龙虎榜 {target} 失败: {exc}")
-            return None
