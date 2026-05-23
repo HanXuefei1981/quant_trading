@@ -29,9 +29,15 @@ def _fetch_today_snapshot() -> dict | None:
     """从同花顺拉取今日实时北向流向，返回 {date, north_net_inflow, hgt_yi, sgt_yi} 或 None。"""
     try:
         r = requests.get(_HSGT_URL, headers=_HSGT_HEADERS, timeout=10)
+        r.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        logger.warning("同花顺 hsgtApi 网络请求失败: %s", exc)
+        return None
+
+    try:
         d = r.json()
-    except Exception as exc:
-        logger.warning("同花顺 hsgtApi 请求失败: %s", exc)
+    except ValueError as exc:
+        logger.warning("同花顺 hsgtApi 响应非 JSON: %s", exc)
         return None
 
     times = d.get("time", [])
@@ -82,7 +88,7 @@ class NorthboundCollector(BaseCollector):
         self._meta_repo = meta_repo
 
     def collect(self, codes: list[str] | None = None, since: date | None = None) -> CollectStats:
-        """拉取今日北向快照，写入 DAL northbound 表。codes 参数忽略。"""
+        """拉取今日北向快照，写入 DAL northbound 表。codes 和 since 参数对市场级采集器均忽略。"""
         stats = CollectStats()
         today = datetime.now().date()
 

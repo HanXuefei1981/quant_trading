@@ -41,6 +41,8 @@ def test_collect_writes_today_row(repos):
     assert stats.ok == 1
     result = raw_repo.load_northbound()
     assert len(result) == 1
+    assert result.iloc[0]["north_net_inflow"] == pytest.approx(1e9)
+    assert result.iloc[0]["hgt_yi"] == pytest.approx(5.0)
 
 
 def test_collect_skips_if_already_collected_today(repos):
