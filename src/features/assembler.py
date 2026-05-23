@@ -201,7 +201,7 @@ def assemble(
 
         # 特征工程（北向资金由 add_signal_features 内部 merge，勿在此重复合并）
         df = add_all_features(raw)
-        df = add_report_features(df, code)
+        df = add_report_features(df, code, raw_repo=raw_repo)
         df = add_signal_features(df, code, lhb_df=lhb_df, north_df=north_df)
         df["code"] = code
         df.to_parquet(processed_path, index=False)  # B4 将迁移此写入路径
@@ -319,7 +319,7 @@ def assemble_incremental(
         raw = _merge_fund_flow(raw, code, raw_repo, since=lookback_date)
 
         df = add_all_features(raw)
-        df = add_report_features(df, code)
+        df = add_report_features(df, code, raw_repo=raw_repo, since=lookback_date)
         df = add_signal_features(df, code, lhb_df=lhb_df, north_df=north_df)
         df["code"] = code
 
