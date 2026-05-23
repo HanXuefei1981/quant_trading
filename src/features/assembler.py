@@ -21,7 +21,7 @@ from typing import Optional
 import pandas as pd
 from tqdm import tqdm
 
-from config.settings import PROCESSED_DIR, MIN_TRADE_DAYS
+from config.settings import MIN_TRADE_DAYS
 from src.dal.raw_repo import RawRepo
 from src.dal.feature_repo import FeatureRepo
 from src.features.indicators import add_all_features, get_feature_columns
@@ -146,8 +146,6 @@ def assemble(
             from src.dal.feature_repo import FeatureRepo
             feature_repo = FeatureRepo(conn)
 
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-
     if codes is None:
         codes = _get_kline_codes(raw_repo)
 
@@ -180,8 +178,6 @@ def assemble(
     flow_missing = 0
 
     for code in tqdm(codes, desc="特征组装"):
-        processed_path = PROCESSED_DIR / f"{code}.parquet"
-
         # 读取 K 线（从 DuckDB RawRepo）
         raw = raw_repo.load_kline(code)
         if raw.empty or len(raw) < MIN_TRADE_DAYS:
@@ -206,7 +202,6 @@ def assemble(
         df = add_report_features(df, code, raw_repo=raw_repo)
         df = add_signal_features(df, code, lhb_df=lhb_df, north_df=north_df)
         df["code"] = code
-        df.to_parquet(processed_path, index=False)  # B4 将迁移此写入路径
         all_dfs.append(df)
 
     logger.info(
@@ -229,9 +224,8 @@ def assemble(
     logger.info(f"因子预处理：{len(feature_cols)} 个因子，MAD去极值 → 板块中性化 → Z-score")
     combined = preprocess_features(combined, feature_cols)
 
-    out_path = PROCESSED_DIR / "market_features.parquet"
-    combined.to_parquet(out_path, index=False)  # B4 将迁移此写入路径
-    logger.info(f"全市场特征数据已保存至 {out_path}，共 {len(combined)} 行")
+    feature_repo.upsert_features(combined)
+    logger.info(f"全市场特征已写入 FeatureRepo，共 {len(combined)} 行")
     return combined
 
 
@@ -286,7 +280,6 @@ def assemble_incremental(
 
     logger.info(f"增量模式：处理 date > {since} 的新数据（回看窗口起点: {lookback_date}）")
 
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     codes = _get_kline_codes(raw_repo)
     if not codes:
         raise RuntimeError("kline 表无数据，请先运行: python main.py collect")
@@ -329,24 +322,6 @@ def assemble_incremental(
         if new_rows.empty:
             continue
 
-        # Append 到个股缓存（B4 将迁移此写入路径）
-        processed_path = PROCESSED_DIR / f"{code}.parquet"
-        if processed_path.exists():
-            try:
-                existing = pd.read_parquet(processed_path)
-                existing["date"] = pd.to_datetime(existing["date"])
-                combined_stock = (
-                    pd.concat([existing, new_rows], ignore_index=True)
-                    .drop_duplicates(["date", "code"], keep="last")
-                    .sort_values("date")
-                    .reset_index(drop=True)
-                )
-            except Exception:
-                combined_stock = new_rows
-        else:
-            combined_stock = new_rows
-        combined_stock.to_parquet(processed_path, index=False)  # B4 将迁移
-
         new_dfs.append(new_rows)
 
     logger.info(f"增量：有新数据 {len(new_dfs)} 只股票，跳过 {skipped} 只")
@@ -369,23 +344,7 @@ def assemble_incremental(
     feature_cols = get_feature_columns(combined)
     combined = preprocess_features(combined, feature_cols)
 
-    # Append 到 market_features.parquet（B4 将迁移此写入路径）
-    mf_path = PROCESSED_DIR / "market_features.parquet"
-    if mf_path.exists():
-        try:
-            existing_mf = pd.read_parquet(mf_path)
-            existing_mf["date"] = pd.to_datetime(existing_mf["date"])
-            merged_mf = (
-                pd.concat([existing_mf, combined], ignore_index=True)
-                .drop_duplicates(["date", "code"], keep="last")
-                .sort_values(["date", "code"])
-                .reset_index(drop=True)
-            )
-        except Exception:
-            merged_mf = combined
-    else:
-        merged_mf = combined
-    merged_mf.to_parquet(mf_path, index=False)  # B4 将迁移
+    feature_repo.upsert_features(combined)
 
     new_max_date = combined["date"].max().date()
     # watermark 更新（B5 迁移后改为 meta_repo.set_last_date）
@@ -395,45 +354,24 @@ def assemble_incremental(
     except Exception:
         pass
     logger.info(
-        f"增量完成：新增 {len(combined)} 行，"
-        f"market_features.parquet 现共 {len(merged_mf)} 行，"
+        f"增量完成：新增 {len(combined)} 行，已写入 FeatureRepo，"
         f"水位更新至 {new_max_date}"
     )
     return combined
 
 
-def assemble_inference() -> pd.DataFrame:
-    """推断模式：加载个股最新截面特征（scan 专用，无需标签）。
-
-    读取 data/processed/{code}.parquet，取每只股票最新一行，
-    过滤到同一截面日期，做跨截面预处理后返回。
-    """
-    from src.features.preprocessing import preprocess_features
-
-    parquet_files = [
-        f for f in PROCESSED_DIR.glob("*.parquet")
-        if f.stem != "market_features"
-    ]
-    if not parquet_files:
-        raise FileNotFoundError("未找到个股缓存文件，请先运行 Phase 1")
-
-    latest_rows = []
-    for fpath in parquet_files:
-        try:
-            df = pd.read_parquet(fpath)
-            if not df.empty:
-                latest_rows.append(df.iloc[[-1]])
-        except Exception:
-            continue
-
-    if not latest_rows:
-        raise RuntimeError("无法读取任何个股缓存")
-
-    combined = pd.concat(latest_rows, ignore_index=True)
-    latest_date = combined["date"].max()
-    combined = combined[combined["date"] == latest_date].reset_index(drop=True)
-    logger.info(f"推断截面日期: {latest_date.date()}，共 {len(combined)} 只股票")
-
+def assemble_inference(feature_repo: FeatureRepo | None = None) -> pd.DataFrame:
+    """推断模式：从 FeatureRepo 加载最新截面特征（scan 专用，无需标签）。"""
+    if feature_repo is None:
+        from src.dal.connection import get_db
+        feature_repo = FeatureRepo(get_db())
+    date_range = feature_repo.get_feature_date_range()
+    if date_range is None:
+        raise FileNotFoundError("features 表为空，请先运行 Phase 1")
+    latest_date = date_range[1]
+    combined = feature_repo.load_features(latest_date, latest_date)
+    if combined.empty:
+        raise RuntimeError(f"特征截面 {latest_date} 无数据")
+    logger.info(f"推断截面日期: {latest_date}，共 {len(combined)} 只股票")
     feature_cols = get_feature_columns(combined)
-    combined = preprocess_features(combined, feature_cols)
-    return combined
+    return preprocess_features(combined, feature_cols)
