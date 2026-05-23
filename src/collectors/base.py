@@ -32,9 +32,9 @@ class BaseCollector(ABC):
     """
 
     @abstractmethod
-    def collect(self, codes: list[str] = [], since: date | None = None) -> CollectStats:
+    def collect(self, codes: list[str] | None = None, since: date | None = None) -> CollectStats:
         """执行采集并写入 DAL。
 
-        codes: 需要采集的股票代码列表；市场级采集器忽略此参数。
+        codes: 需要采集的股票代码列表；None 表示空列表；市场级采集器忽略此参数。
         since: 覆盖增量起点；None 时采集器自行从 MetaRepo 查询上次日期。
         """

@@ -36,6 +36,7 @@ def test_collect_first_time_writes_all_rows(repos):
     raw_repo, meta_repo = repos
     collector = FundFlowCollector(raw_repo=raw_repo, meta_repo=meta_repo, delay=0)
 
+    # patch 模块级函数对象（而非 collector 命名空间），因为 import 在方法体内延迟执行
     with patch("src.data.fund_flow.fetch_fund_flow", return_value=_fake_fund_flow(3)):
         stats = collector.collect(codes=["000001"])
 
@@ -53,6 +54,7 @@ def test_collect_incremental_skips_old_rows(repos):
     meta_repo.set_last_date("fund_flow", "000001", date(2024, 1, 3))
 
     collector = FundFlowCollector(raw_repo=raw_repo, meta_repo=meta_repo, delay=0)
+    # patch 模块级函数对象（而非 collector 命名空间），因为 import 在方法体内延迟执行
     with patch("src.data.fund_flow.fetch_fund_flow", return_value=_fake_fund_flow(3)):
         stats = collector.collect(codes=["000001"])
 
@@ -65,6 +67,7 @@ def test_collect_network_failure_counts_fail(repos):
     raw_repo, meta_repo = repos
     collector = FundFlowCollector(raw_repo=raw_repo, meta_repo=meta_repo, delay=0)
 
+    # patch 模块级函数对象（而非 collector 命名空间），因为 import 在方法体内延迟执行
     with patch("src.data.fund_flow.fetch_fund_flow", return_value=None):
         stats = collector.collect(codes=["000001"])
 

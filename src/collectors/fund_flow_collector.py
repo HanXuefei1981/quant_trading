@@ -36,8 +36,10 @@ class FundFlowCollector(BaseCollector):
         self._meta_repo = meta_repo
         self.delay = delay
 
-    def collect(self, codes: list[str] = [], since: date | None = None) -> CollectStats:
+    def collect(self, codes: list[str] | None = None, since: date | None = None) -> CollectStats:
         """拉取资金流向，增量写入 DAL fund_flow 表。"""
+        if codes is None:
+            codes = []
         from src.data.fund_flow import fetch_fund_flow
 
         stats = CollectStats()
@@ -49,7 +51,7 @@ class FundFlowCollector(BaseCollector):
             try:
                 df = fetch_fund_flow(code, use_cache=False)
             except Exception as exc:
-                logger.debug(f"资金流向拉取异常 {code}: {exc}")
+                logger.warning(f"资金流向拉取异常 {code}: {exc}")
                 df = None
 
             if df is None or df.empty:
