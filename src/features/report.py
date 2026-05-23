@@ -12,7 +12,6 @@
 """
 import logging
 from datetime import date
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 _REPORT_WINDOW = 30  # 近30日研报计数窗口（交易日）
 
 
-def _load_reports(code: str, raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_reports(code: str, raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame | None:
     df = raw_repo.load_reports(code, since=since)
     if df.empty:
         return None
@@ -32,7 +31,7 @@ def _load_reports(code: str, raw_repo: RawRepo, since: date | None = None) -> Op
     return df
 
 
-def _load_eps(code: str, raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_eps(code: str, raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame | None:
     df = raw_repo.load_eps_snapshots(code, since=since)
     if df.empty:
         return None

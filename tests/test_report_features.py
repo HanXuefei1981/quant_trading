@@ -4,7 +4,6 @@ from datetime import date
 from pathlib import Path
 
 import duckdb
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -99,14 +98,17 @@ def test_eps_revision_direction(conn):
 # ── since param propagation ───────────────────────────────────────────────────
 
 def test_since_filters_reports(conn):
-    """With since=date, only reports after since are loaded."""
+    """since 参数真正生效：两条研报在同一 30 日窗口内，过滤后只剩一条。"""
     from src.features.report import add_report_features
 
-    _insert_reports(conn, ["2024-01-01", "2024-06-01"])
-    kline = _make_kline(["2024-07-01"])
+    _insert_reports(conn, ["2024-01-05", "2024-01-10"])
+    kline = _make_kline(["2024-01-20"])
     raw_repo = RawRepo(conn)
 
-    # With since filtering to only June report
-    result = add_report_features(kline, "000001", raw_repo=raw_repo, since=date(2024, 1, 1))
-    # Only the 2024-06-01 report is visible (available_date = 2024-06-02 <= 2024-07-01)
-    assert result["report_count_30d"].iloc[0] == 1
+    # 不过滤：两条均在 30 日窗口内，count == 2
+    result_all = add_report_features(kline, "000001", raw_repo=raw_repo)
+    assert result_all["report_count_30d"].iloc[0] == 2
+
+    # since=2024-01-08 → 只加载 2024-01-10 那条，count == 1
+    result_filtered = add_report_features(kline, "000001", raw_repo=raw_repo, since=date(2024, 1, 8))
+    assert result_filtered["report_count_30d"].iloc[0] == 1
