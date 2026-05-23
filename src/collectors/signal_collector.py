@@ -71,7 +71,12 @@ class SignalCollector(BaseCollector):
 
         keep = ["date", "code", "lhb_net_buy", "lhb_buy_amount", "lhb_sell_amount"]
         df = df[[c for c in keep if c in df.columns]]
-        df = df.dropna(subset=["code"]).drop_duplicates(subset=["code"])
+        df = df.dropna(subset=["code"])
+        before = len(df)
+        df = df.drop_duplicates(subset=["code"])
+        dropped = before - len(df)
+        if dropped:
+            logger.debug("龙虎榜同日多条记录去重 %s: 丢弃 %d 行", date_str, dropped)
         return df if not df.empty else None
 
     def collect(self, codes: list[str] | None = None, since: date | None = None) -> CollectStats:
