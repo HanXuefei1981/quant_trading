@@ -224,7 +224,10 @@ def update(args):
 
     # 读取当前水位
     kline_since = wm.get_since("kline")
-    logger.info(f"K线水位: {kline_since}  特征水位: {wm.get_since('features')}")
+    from src.dal.connection import get_db
+    from src.dal.meta_repo import MetaRepo as _MetaRepo
+    feat_since = _MetaRepo(get_db()).get_last_date("features", "__market__")
+    logger.info(f"K线水位: {kline_since}  特征水位: {feat_since}")
 
     codes = get_active_tdx_codes()
     if args.sample:

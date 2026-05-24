@@ -1,4 +1,5 @@
 """Tests for assembler.py watermark lifecycle via MetaRepo."""
+import contextlib
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -82,6 +83,8 @@ def test_incremental_reads_watermark_from_metarepo(conn):
     expected = date(2024, 3, 1) - timedelta(days=300)
     assert called_since.get("since") == expected, \
         f"Expected since={expected}, got {called_since.get('since')}"
+    # watermark must not change when there is no new data
+    assert meta_repo.get_last_date("features", "__market__") == date(2024, 3, 1)
 
 
 # ── 增量运行后 watermark 更新 ─────────────────────────────────────────────────
@@ -94,7 +97,19 @@ def test_watermark_updated_after_incremental(conn):
     meta_repo = MetaRepo(conn)
     meta_repo.set_last_date("features", "__market__", date(2024, 4, 1))
 
-    new_data = pd.DataFrame({
+    # 25 business-day kline rows spanning before + after the watermark (passes len < 20 guard)
+    kline_dates = pd.bdate_range("2024-03-01", periods=25)
+    kline_data = pd.DataFrame({
+        "date": kline_dates,
+        "code": "000001",
+        "open": [10.0] * 25,
+        "high": [11.0] * 25,
+        "low": [9.0] * 25,
+        "close": [10.5] * 25,
+        "volume": [1000.0] * 25,
+    })
+    # feature_data has a row after the watermark date (2024-04-01), so new_rows is non-empty
+    feature_data = pd.DataFrame({
         "date": pd.to_datetime(["2024-05-01"]),
         "code": "000001",
         "future_ret": [0.01],
@@ -102,17 +117,17 @@ def test_watermark_updated_after_incremental(conn):
         "label": [1],
     })
 
-    import contextlib
     patches = [
         patch("src.features.assembler._get_kline_codes", return_value=["000001"]),
         patch("src.features.assembler._load_northbound", return_value=None),
         patch("src.features.assembler._load_lhb_all", return_value=None),
-        patch.object(RawRepo, "load_kline", return_value=new_data),
-        patch("src.features.assembler.add_all_features", return_value=new_data),
+        patch.object(RawRepo, "load_kline", return_value=kline_data),
+        patch("src.features.assembler.add_all_features", return_value=feature_data),
         patch("src.features.assembler.add_report_features", side_effect=lambda df, c, **kw: df),
         patch("src.features.assembler.add_signal_features", side_effect=lambda df, c, **kw: df),
         patch("src.features.assembler.add_cross_sectional_label", side_effect=lambda df: df.assign(label=1)),
         patch("src.features.assembler.preprocess_features", side_effect=lambda df, cols: df),
+        patch.object(FeatureRepo, "upsert_features", return_value=None),
     ]
     with contextlib.ExitStack() as stack:
         for p in patches:
@@ -124,5 +139,4 @@ def test_watermark_updated_after_incremental(conn):
         )
 
     updated = meta_repo.get_last_date("features", "__market__")
-    assert updated is not None
-    assert updated >= date(2024, 4, 1), "watermark must advance after incremental run"
+    assert updated == date(2024, 5, 1), f"watermark must advance to max new date, got {updated}"

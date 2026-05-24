@@ -7,8 +7,6 @@
     "tencent":      "2026-05-11",   # 腾讯财经快照最新日期
     "fundamentals": "2026-05-10",   # 基本面最新更新日期（月频）
     "fund_flow":    "2026-05-11",   # 个股资金流向最新更新日期
-    # "features" key removed — features watermark is now managed by MetaRepo
-    # (collect_log table, code="__market__")
   }
 
 get_since(data_type) 返回水位日期（None 表示尚无记录，需全量）。

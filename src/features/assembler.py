@@ -1,22 +1,20 @@
-"""特征组装器：从 DuckDB RawRepo 读取原始数据，输出特征工程结果到 data/processed/
+"""特征组装器：从 DuckDB RawRepo 读取原始数据，完成特征工程后写入 FeatureRepo。
 
 设计原则：
   - 不调用任何网络接口（纯本地操作）
   - 数据来源完全由 src/collectors/ 负责写入，本模块只读
   - 替代 pipeline._run_tdx_pipeline() 成为 Phase 1 的核心逻辑
-  - 读取路径已迁移到 DuckDB RawRepo（B2），写入路径保留 Parquet（待 B4 迁移）
+  - 读取路径已迁移到 DuckDB RawRepo（B2），写入路径已迁移到 DuckDB FeatureRepo（B4）
 
 增量模式（assemble_incremental）：
   - 从 meta_repo 读取上次特征截止日期 T
   - 每只股票只处理 date > T 的新行（取 300 天回看窗口保证滚动指标准确）
   - 跨截面步骤（标签 + 预处理）仅在新日期上运行
-  - 完成后更新 watermark["features"]
+  - 完成后通过 meta_repo.set_last_date 更新水位
 """
 import logging
 import numpy as np
 from datetime import date, timedelta
-from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 from tqdm import tqdm
@@ -46,7 +44,7 @@ def _get_kline_codes(raw_repo: RawRepo) -> list[str]:
     ).fetchall()]
 
 
-def _load_fundamentals(code: str, raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_fundamentals(code: str, raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame | None:
     """加载基本面数据（从 DuckDB RawRepo）。"""
     df = raw_repo.load_fundamentals(code, since=since)
     if df.empty:
@@ -55,7 +53,7 @@ def _load_fundamentals(code: str, raw_repo: RawRepo, since: date | None = None) 
     return df
 
 
-def _load_fund_flow(code: str, raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_fund_flow(code: str, raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame | None:
     """加载个股资金流向数据（从 DuckDB RawRepo）。"""
     df = raw_repo.load_fund_flow(code, since=since)
     if df.empty:
@@ -64,7 +62,7 @@ def _load_fund_flow(code: str, raw_repo: RawRepo, since: date | None = None) -> 
     return df
 
 
-def _load_northbound(raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_northbound(raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame | None:
     """加载北向资金历史（从 DuckDB RawRepo）。"""
     df = raw_repo.load_northbound(since=since)
     if df.empty:
@@ -73,7 +71,7 @@ def _load_northbound(raw_repo: RawRepo, since: date | None = None) -> Optional[p
     return df.sort_values("date").reset_index(drop=True)
 
 
-def _load_lhb_all(raw_repo: RawRepo, since: date | None = None) -> Optional[pd.DataFrame]:
+def _load_lhb_all(raw_repo: RawRepo, since: date | None = None) -> pd.DataFrame | None:
     """加载全市场龙虎榜历史（从 DuckDB RawRepo）。"""
     df = raw_repo.load_all_lhb(since=since)
     if df.empty:
@@ -122,8 +120,8 @@ def _merge_northbound(kline: pd.DataFrame, north_df: pd.DataFrame) -> pd.DataFra
 def assemble(
     raw_repo=None,
     feature_repo=None,
-    codes: Optional[list[str]] = None,
-    sample_size: Optional[int] = None,
+    codes: list[str] | None = None,
+    sample_size: int | None = None,
 ) -> pd.DataFrame:
     """从 DuckDB RawRepo 读取原始数据，完成特征工程，写入 FeatureRepo (features 表)。
 
@@ -239,14 +237,14 @@ def assemble_incremental(
     步骤：
       1. 读 meta_repo 获取上次截止日期 T
       2. 对每只股票：读 kline 近 300 天 → merge 基本面/资金流向/北向 → 计算特征
-         → 保留 date > T 的新行 → append 到 data/processed/{code}.parquet
-      3. 汇总所有新行 → 跨截面标签 + 预处理 → append 到 market_features.parquet
-      4. 更新 watermark（B5 迁移后由 meta_repo 写入）
+         → 保留 date > T 的新行
+      3. 汇总所有新行 → 跨截面标签 + 预处理 → 写入 FeatureRepo（features 表）
+      4. 更新水位（通过 meta_repo.set_last_date）
 
     Returns:
         新增的 DataFrame（可能为空 DataFrame 如当日已是最新）。
     """
-    if raw_repo is None or feature_repo is None:
+    if raw_repo is None or feature_repo is None or meta_repo is None:
         from src.dal.connection import get_db
         conn = get_db()
         if raw_repo is None:
