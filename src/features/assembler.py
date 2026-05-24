@@ -125,11 +125,11 @@ def assemble(
     codes: Optional[list[str]] = None,
     sample_size: Optional[int] = None,
 ) -> pd.DataFrame:
-    """从 DuckDB RawRepo 读取原始数据，完成特征工程，输出 market_features.parquet。
+    """从 DuckDB RawRepo 读取原始数据，完成特征工程，写入 FeatureRepo (features 表)。
 
     Args:
         raw_repo:    RawRepo 实例；None 时自动从默认连接创建。
-        feature_repo: FeatureRepo 实例（B4 写入迁移后使用）；None 时自动创建。
+        feature_repo: FeatureRepo 实例；None 时自动创建。
         codes:       指定处理的股票列表；None 表示处理所有已缓存 K 线。
         sample_size: 调试用，限制处理的股票数量。
 
