@@ -29,20 +29,22 @@ logger = setup_logger("collect_m3")
 
 
 def _get_trading_dates(start: str, end: str) -> list[date]:
-    """从 market_features.parquet 获取指定范围内的真实交易日列表。"""
-    from config.settings import PROCESSED_DIR
-    mf_path = PROCESSED_DIR / "market_features.parquet"
-    if not mf_path.exists():
-        # 回退：用 pandas bdate_range 近似
-        logger.warning("market_features.parquet 不存在，使用 bdate_range 近似交易日")
-        return list(pd.bdate_range(start, end).date)
-
-    df = pd.read_parquet(mf_path, columns=["date"])
-    df["date"] = pd.to_datetime(df["date"])
-    dates = sorted({d.date() for d in df["date"]})
+    """从 DuckDB features 表获取指定范围内的真实交易日列表。"""
+    from src.dal.connection import get_db
     start_d = pd.Timestamp(start).date()
     end_d = pd.Timestamp(end).date()
-    return [d for d in dates if start_d <= d <= end_d]
+    try:
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT DISTINCT date FROM features WHERE date >= ? AND date <= ? ORDER BY date",
+            [start_d, end_d],
+        ).fetchall()
+        if rows:
+            return [r[0] if isinstance(r[0], date) else r[0].date() for r in rows]
+        logger.warning("features 表中无数据，使用 bdate_range 近似交易日")
+    except Exception as exc:
+        logger.warning(f"查询 features 表失败，使用 bdate_range 近似交易日: {exc}")
+    return list(pd.bdate_range(start, end).date)
 
 
 def collect_lhb(start_date: str = "2022-07-01", end_date: str = None):

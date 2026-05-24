@@ -18,20 +18,25 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from config.settings import PROCESSED_DIR
+from config.settings import DATA_DIR
+from src.dal.feature_repo import FeatureRepo
 from src.features.indicators import get_feature_columns
 from src.models.trainer import time_split, prepare_xy, train_lgbm
 from src.models.evaluator import evaluate_split
 
 UP_PCT = 0.70
 DOWN_PCT = 0.30
-OUT_DIR = PROCESSED_DIR.parent / "models" / "g2_rank"
+OUT_DIR = DATA_DIR / "models" / "g2_rank"
 
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print("[G2] 加载数据 ...")
-    df = pd.read_parquet(PROCESSED_DIR / "market_features.parquet")
+    repo = FeatureRepo()
+    date_range = repo.get_feature_date_range()
+    if date_range is None:
+        raise FileNotFoundError("features 表为空，请先运行: python main.py 1")
+    df = repo.load_features(date_range[0], date_range[1])
     print(f"  数据形状: {df.shape}")
     print(f"  原 label 分布: {df['label'].value_counts(normalize=True).round(4).to_dict()}")
 
