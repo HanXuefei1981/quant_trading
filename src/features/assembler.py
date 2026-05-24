@@ -259,21 +259,18 @@ def assemble_incremental(
             from src.dal.meta_repo import MetaRepo as _MetaRepo
             meta_repo = _MetaRepo(conn)
 
-    # 读取 watermark：优先使用 meta_repo，向后兼容旧版 watermark 模块
-    since: date | None = None
-    if meta_repo is not None:
-        since = meta_repo.get_last_date("features", "__market__")
-    if since is None:
-        # 向后兼容：尝试旧版 watermark 模块
-        try:
-            from src.data import watermark as wm
-            since = wm.get_since("features")
-        except Exception:
-            pass
+    # 读取 watermark：从 MetaRepo 获取 features 截止日期
+    since: date | None = meta_repo.get_last_date("features", "__market__")
 
     if since is None:
-        logger.info("无特征水位记录，执行全量组装（等同于 assemble()）")
-        return assemble(raw_repo=raw_repo, feature_repo=feature_repo)
+        logger.info("features 水位为空，执行全量组装")
+        result = assemble(raw_repo=raw_repo, feature_repo=feature_repo)
+        if not result.empty:
+            new_max = result["date"].max()
+            if hasattr(new_max, "date"):
+                new_max = new_max.date()
+            meta_repo.set_last_date("features", "__market__", new_max, row_count=len(result))
+        return result
 
     since_ts = pd.Timestamp(since)
     lookback_date = since - timedelta(days=300)
@@ -347,12 +344,7 @@ def assemble_incremental(
     feature_repo.upsert_features(combined)
 
     new_max_date = combined["date"].max().date()
-    # watermark 更新（B5 迁移后改为 meta_repo.set_last_date）
-    try:
-        from src.data import watermark as wm
-        wm.update("features", new_max_date)
-    except Exception:
-        pass
+    meta_repo.set_last_date("features", "__market__", new_max_date, row_count=len(combined))
     logger.info(
         f"增量完成：新增 {len(combined)} 行，已写入 FeatureRepo，"
         f"水位更新至 {new_max_date}"

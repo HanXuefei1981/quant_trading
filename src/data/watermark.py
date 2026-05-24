@@ -7,7 +7,8 @@
     "tencent":      "2026-05-11",   # 腾讯财经快照最新日期
     "fundamentals": "2026-05-10",   # 基本面最新更新日期（月频）
     "fund_flow":    "2026-05-11",   # 个股资金流向最新更新日期
-    "features":     "2026-05-11",   # market_features.parquet 最新日期
+    # "features" key removed — features watermark is now managed by MetaRepo
+    # (collect_log table, code="__market__")
   }
 
 get_since(data_type) 返回水位日期（None 表示尚无记录，需全量）。
@@ -24,7 +25,9 @@ from config.settings import DATA_DIR
 logger = logging.getLogger(__name__)
 
 _WATERMARK_PATH = DATA_DIR / "watermark.json"
-_VALID_KEYS = {"kline", "northbound", "tencent", "fundamentals", "fund_flow", "features"}
+# "features" key removed — features watermark is now managed by MetaRepo
+# (collect_log table, code="__market__")
+_VALID_KEYS = {"kline", "northbound", "tencent", "fundamentals", "fund_flow"}
 
 
 def _read() -> dict:
