@@ -3,7 +3,8 @@
 屏蔽列表：atr_ratio, atr, volatility5, volatility20, high_low_ratio
 不改业务代码，模型保存到 data/models/g1_no_vol/，不覆盖原模型。
 """
-import sys, json
+import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,7 +54,7 @@ def main():
 
     # 保存到独立目录
     joblib.dump(model, OUT_DIR / "lgbm_model.joblib")
-    with open(OUT_DIR / "feature_cols.json", "w") as f:
+    with open(OUT_DIR / "feature_cols.json", "w", encoding="utf-8") as f:
         json.dump(feature_cols, f, ensure_ascii=False, indent=2)
     print(f"[G1] 模型已保存到 {OUT_DIR}")
 

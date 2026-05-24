@@ -5,10 +5,11 @@
   - 后 30% 分位 → label=-1（跌）
   - 中间 40%   → label=0（震荡）
 
-不重跑 Phase 1 —— 直接在 market_features.parquet 上重写 label 列。
+不重跑 Phase 1 —— 直接在从 DuckDB 读取的 features 数据上重写 label 列。
 模型保存到 data/models/g2_rank/，不覆盖原模型。
 """
-import sys, json
+import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,7 +74,7 @@ def main():
     print(f"[G2] 最优迭代轮数: {model.best_iteration}")
 
     joblib.dump(model, OUT_DIR / "lgbm_model.joblib")
-    with open(OUT_DIR / "feature_cols.json", "w") as f:
+    with open(OUT_DIR / "feature_cols.json", "w", encoding="utf-8") as f:
         json.dump(all_feats, f, ensure_ascii=False, indent=2)
     print(f"[G2] 模型保存到 {OUT_DIR}")
 
