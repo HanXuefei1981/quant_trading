@@ -19,6 +19,8 @@ _FUND_VALUE_COLS = [
     "market_cap", "float_market_cap", "total_shares", "float_shares",
 ]
 
+_FLOW_COLS = ["major_net_inflow", "major_net_pct"]
+
 
 def _merge_fundamentals(kline: pd.DataFrame, code: str, loader) -> pd.DataFrame:
     """把本地缓存的基本面按 date 左连接到 K 线，并用 volume/float_shares 算换手率。
@@ -43,6 +45,27 @@ def _merge_fundamentals(kline: pd.DataFrame, code: str, loader) -> pd.DataFrame:
         merged.loc[~np.isfinite(merged["turnover"]), "turnover"] = np.nan
 
     return merged
+
+
+def _merge_fund_flow(kline: pd.DataFrame, code: str) -> pd.DataFrame:
+    """把个股资金流向按 date 左连接到 K 线（无数据时原样返回）"""
+    from src.data.fund_flow import load_fund_flow
+    flow_df = load_fund_flow(code)
+    if flow_df is None or flow_df.empty:
+        return kline
+    flow_df = flow_df.copy()
+    flow_df["date"] = pd.to_datetime(flow_df["date"])
+    return kline.merge(
+        flow_df[["date"] + [c for c in _FLOW_COLS if c in flow_df.columns]],
+        on="date", how="left",
+    )
+
+
+def _merge_northbound(kline: pd.DataFrame, north_df: pd.DataFrame) -> pd.DataFrame:
+    """把北向净买入按 date 左连接到单只股票 K 线（宏观共享信号）"""
+    north_slim = north_df[["date", "north_net_inflow"]].copy()
+    north_slim["date"] = pd.to_datetime(north_slim["date"])
+    return kline.merge(north_slim, on="date", how="left")
 
 
 def run_data_pipeline(
@@ -82,10 +105,19 @@ def _run_tdx_pipeline(sample_size: int = None, use_cache: bool = True) -> pd.Dat
         all_codes = all_codes[:sample_size]
         logger.info(f"调试模式：仅处理 {sample_size} 只股票")
 
-    logger.info(f"Step 2+3: 读取本地文件 + 合并基本面 + 特征工程（共 {len(all_codes)} 只）")
+    # 北向资金一次性加载（全市场共享，按日期 join）
+    from src.data.fund_flow import load_northbound_flow
+    north_df = load_northbound_flow()
+    if north_df is not None:
+        logger.info(f"北向资金数据已加载：{len(north_df)} 条")
+    else:
+        logger.info("北向资金数据未找到，north_net_* 因子将全部为 NaN（可运行 fetch-flow 拉取）")
+
+    logger.info(f"Step 2+3: 读取本地文件 + 合并基本面 + 合并资金流向 + 特征工程（共 {len(all_codes)} 只）")
     all_dfs = []
     skipped = 0
     fund_missing = 0
+    flow_missing = 0
 
     for code in tqdm(all_codes, desc="读取TDX数据"):
         processed_path = PROCESSED_DIR / f"{code}.parquet"
@@ -103,6 +135,13 @@ def _run_tdx_pipeline(sample_size: int = None, use_cache: bool = True) -> pd.Dat
         if "float_shares" not in raw.columns:
             fund_missing += 1
 
+        raw = _merge_fund_flow(raw, code)
+        if "major_net_inflow" not in raw.columns:
+            flow_missing += 1
+
+        if north_df is not None:
+            raw = _merge_northbound(raw, north_df)
+
         df = add_all_features(raw)
         df["code"] = code
         df.to_parquet(processed_path, index=False)
@@ -110,7 +149,7 @@ def _run_tdx_pipeline(sample_size: int = None, use_cache: bool = True) -> pd.Dat
 
     logger.info(
         f"有效股票：{len(all_dfs)} 只，跳过（数据不足）：{skipped} 只，"
-        f"基本面缺失：{fund_missing} 只"
+        f"基本面缺失：{fund_missing} 只，资金流向缺失：{flow_missing} 只"
     )
 
     if not all_dfs:

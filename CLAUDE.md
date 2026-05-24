@@ -1,5 +1,13 @@
 # 量化交易系统开发原则
 
+## 开发规范
+
+所有开发任务必须严格遵循 **superpowers** 插件规范：
+- 任何任务开始前，先用 Skill 工具检查是否有适用的 superpowers skill，即使只有 1% 的可能性也必须调用
+- 优先顺序：用户指令 > superpowers skills > 默认系统行为
+- 流程类 skill（brainstorming、debugging、writing-plans）先于实现类 skill 调用
+- skill 有 checklist 时，用 TaskCreate 逐条建任务并跟踪进度
+
 ## 外部数据质量问题处理原则
 
 **当遇到接口或外部数据（通达信、akshare 等）的质量问题时：**

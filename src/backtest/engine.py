@@ -160,6 +160,8 @@ def run_backtest(
             continue
 
         sig_today = signal_pivot.loc[date].dropna()
+        if min_signal > 0:
+            sig_today = sig_today[sig_today > min_signal]
         if sig_today.empty:
             continue
 
