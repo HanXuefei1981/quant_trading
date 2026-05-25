@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 _RECORD_FMT = "<IIIIIfII"
 _RECORD_SIZE = struct.calcsize(_RECORD_FMT)   # 32 bytes
-_DAY_PATTERN = re.compile(r'(?:sh|sz|bj)/lday/(?:sh|sz|bj)(\d{6})\.day$', re.IGNORECASE)
+_DAY_PATTERN = re.compile(r'(?:sh|sz|bj)[/\\]lday[/\\](?:sh|sz|bj)(\d{6})\.day$', re.IGNORECASE)
 _START_DATE_INT = int(START_DATE)             # e.g. 20210101
 _BATCH_STOCKS = 500
 

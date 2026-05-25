@@ -83,3 +83,22 @@ def test_ingest_kline_date_range(fake_zip):
 
     df = raw_repo.load_kline("000001")
     assert all(str(d)[:10] >= "2024-01-01" for d in df["date"])
+
+
+def test_ingest_kline_windows_backslash_path(tmp_path):
+    """Windows zip 路径（反斜杠分隔）应被正确解析。"""
+    records = [
+        (20240102, 100, 105, 98, 103, 5e8, 3000),
+    ]
+    zip_path = tmp_path / "windows.zip"
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.writestr(r"sh\lday\sh123456.day", _make_day_bytes(records))
+
+    conn = duckdb.connect(":memory:")
+    migrate(conn)
+    raw_repo = RawRepo(conn)
+    stats = ingest_kline(zip_path, raw_repo)
+
+    assert stats.ok == 1
+    df = raw_repo.load_kline("123456")
+    assert len(df) == 1
