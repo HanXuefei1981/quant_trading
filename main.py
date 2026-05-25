@@ -208,49 +208,47 @@ def fetch_flow(args):
 
 
 def collect(args):
-    """采集所有原始数据到 data/raw/（解耦层：只负责数据采集，不做特征工程）
+    """采集今日增量数据到 DuckDB（北向资金 + 龙虎榜快照）。
 
-    执行步骤：
-      1. TDX → data/raw/kline/       （本地二进制转 Parquet，极快）
-      2. 北向资金 → data/raw/northbound.parquet  （同花顺 THS API，当日快照追加）
-      3. 腾讯财经 → data/raw/tencent/ （可选，--with-tencent，当日快照追加）
-
-    基本面与个股资金流向缓存路径不变（data/fundamentals/, data/fund_flow/），
-    使用原有的 fetch-fund / fetch-flow 命令更新。
+    注意：K 线数据通过 `ingest` 命令从 zip 文件写入，不在此处处理。
+    日常增量更新：先运行 `ingest --zip <新zip>`，再运行 `collect`，最后运行 `1`。
     """
-    from src.collectors.tdx_collector import TDXCollector
+    from src.dal.connection import get_db
+    from src.dal.schema import migrate
     from src.collectors.northbound_collector import NorthboundCollector
-    from src.data.tdx_reader import get_active_tdx_codes
+    from src.collectors.signal_collector import SignalCollector
 
-    if not _SYNC_STATE_FILE.exists():
-        logger.error("未找到数据同步确认记录，请先运行 sync 命令")
-        return
+    conn = get_db()
+    migrate(conn)
 
-    # Step 1: TDX K 线 → data/raw/kline/
-    logger.info("Step 1: 转换 TDX K 线 → data/raw/kline/")
-    tdx = TDXCollector()
-    codes = get_active_tdx_codes()
-    if args.sample:
-        codes = codes[:args.sample]
-    incremental = not args.refresh
-    kline_stats = tdx.fetch_all(codes, incremental=incremental)
-    logger.info(f"K 线转换完成：{kline_stats}")
-
-    # Step 2: 北向资金今日快照
-    logger.info("Step 2: 更新北向资金快照 → data/raw/northbound.parquet")
+    # Step 1: 北向资金今日快照
+    logger.info("Step 1: 更新北向资金快照 → DuckDB northbound")
     north = NorthboundCollector()
-    north_stats = north.fetch_all([])
+    north_stats = north.collect()
     logger.info(f"北向资金更新完成：{north_stats}")
 
-    # Step 3: 腾讯财经（可选）
+    # Step 2: 龙虎榜今日数据
+    logger.info("Step 2: 更新龙虎榜 → DuckDB lhb")
+    signal = SignalCollector()
+    signal_stats = signal.collect()
+    logger.info(f"龙虎榜更新完成：{signal_stats}")
+
+    # Step 3: 腾讯财经 PE/PB 快照（可选）
     if getattr(args, "with_tencent", False):
         from src.collectors.tencent_collector import TencentCollector
-        logger.info("Step 3: 采集腾讯财经 PE/PB/市值快照 → data/raw/tencent/")
+        from src.data.tdx_reader import get_active_tdx_codes
+        logger.info("Step 3: 采集腾讯财经 PE/PB/市值快照 → DuckDB fundamentals_snapshot")
+        codes = get_active_tdx_codes()
+        if args.sample:
+            codes = codes[:args.sample]
         tencent = TencentCollector()
-        tencent_stats = tencent.fetch_all(codes, incremental=incremental)
+        tencent_stats = tencent.collect(codes)
         logger.info(f"腾讯快照完成：{tencent_stats}")
 
-    logger.info("collect 完成，现在可以运行: python main.py 1")
+    logger.info(
+        "collect 完成。下一步:\n"
+        "  python main.py 1  # 特征工程（Phase 1）"
+    )
 
 
 def update(args):
