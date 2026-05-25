@@ -280,3 +280,37 @@ def load_inference_data() -> pd.DataFrame:
     feature_cols = get_feature_columns(combined)
     combined = preprocess_features(combined, feature_cols)
     return combined
+
+
+def load_features_from_db(feature_repo=None) -> pd.DataFrame:
+    """从 DuckDB features 表加载全量特征数据，供 Phase 2 训练使用。
+
+    这是 load_processed_data()（读 market_features.parquet）的 DuckDB 替代版本。
+    Phase 1 assembler 写入 DuckDB features 表后，Phase 2 通过此函数读取。
+
+    Args:
+        feature_repo: FeatureRepo 实例；None 时从默认连接自动创建。
+
+    Raises:
+        FileNotFoundError: features 表为空时（Phase 1 尚未运行）。
+    """
+    from src.dal.feature_repo import FeatureRepo as _FeatureRepo
+    if feature_repo is None:
+        from src.dal.connection import get_db
+        feature_repo = _FeatureRepo(get_db())
+
+    date_range = feature_repo.get_feature_date_range()
+    if date_range is None:
+        raise FileNotFoundError(
+            "features 表为空，请先运行 Phase 1: python main.py 1"
+        )
+
+    date_from, date_to = date_range
+    df = feature_repo.load_features(date_from, date_to)
+    logger.info(
+        "从 DuckDB features 表加载完成：%d 行，"
+        "时间范围 %s ~ %s，%d 只股票",
+        len(df), date_from, date_to,
+        df["code"].nunique() if "code" in df.columns else 0,
+    )
+    return df

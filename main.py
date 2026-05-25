@@ -398,16 +398,16 @@ def phase1(args):
 def phase2(args):
     """Phase 2: 模型训练"""
     import json
-    from src.data.pipeline import load_processed_data
+    from src.data.pipeline import load_features_from_db
     from src.models.trainer import run_training, run_training_rolling, run_training_final, walk_forward_cv
     from src.models.evaluator import run_evaluation
     from config.settings import PROCESSED_DIR
 
-    logger.info("Phase 2 开始：加载数据")
+    logger.info("Phase 2 开始：从 DuckDB features 表加载数据")
     try:
-        df = load_processed_data()
-    except FileNotFoundError:
-        logger.error("未找到处理后数据，请先运行 phase1 生成特征数据")
+        df = load_features_from_db()
+    except FileNotFoundError as exc:
+        logger.error(str(exc))
         return
 
     logger.info(f"数据加载完成：{len(df)} 行，{df['code'].nunique()} 只股票")
