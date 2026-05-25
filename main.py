@@ -446,14 +446,14 @@ def phase2(args):
 
 def phase3(args):
     """Phase 3: 回测"""
-    from src.data.pipeline import load_processed_data
+    from src.data.pipeline import load_features_from_db
     from src.models.trainer import load_ensemble, time_split
     from src.backtest.engine import generate_signals, run_backtest, build_benchmark
     from src.backtest.metrics import print_report
     from config.settings import PROCESSED_DIR
 
     logger.info("Phase 3 开始：加载数据与模型")
-    df = load_processed_data()
+    df = load_features_from_db()
     lgbm_model, ridge_model, w_lgbm, w_ridge, feature_cols = load_ensemble()
 
     _, val_df, test_df = time_split(df)
