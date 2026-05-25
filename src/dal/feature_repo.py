@@ -25,7 +25,15 @@ class FeatureRepo:
             if col not in existing:
                 if not _SAFE_COL.match(col):
                     raise ValueError(f"Unsafe column name rejected: {col!r}")
-                dtype = "INTEGER" if col == "label" else "DOUBLE"
+                if col == "label":
+                    dtype = "INTEGER"
+                elif hasattr(df[col], "dtype") and (
+                    pd.api.types.is_string_dtype(df[col])
+                    or df[col].dtype == object
+                ):
+                    dtype = "VARCHAR"
+                else:
+                    dtype = "DOUBLE"
                 self._conn.execute(f'ALTER TABLE features ADD COLUMN "{col}" {dtype}')
         self._conn.register("_feat_tmp", df)
         cols = ", ".join(f'"{c}"' for c in df.columns)
