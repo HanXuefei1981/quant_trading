@@ -20,6 +20,55 @@ logger = setup_logger("quant")
 _SYNC_STATE_FILE = Path(__file__).parent / "data" / ".sync_state.json"
 
 
+def ingest(args):
+    """从 hsjday.zip 解析 K 线数据直接写入 DuckDB（无需 sync + collect 流程）。
+
+    用法:
+      python main.py ingest --zip /Volumes/Elements/5、投资/tdx_data/2026-05-21/hsjday.zip
+    """
+    from src.dal.schema import migrate
+    from src.dal.connection import get_db
+    from src.dal.raw_repo import RawRepo
+    from src.data.ingest_zip import ingest_kline
+
+    zip_path = Path(args.zip)
+    if not zip_path.exists():
+        logger.error("找不到 zip 文件: %s", zip_path)
+        return
+
+    logger.info("建立 DuckDB 并迁移 schema...")
+    conn = get_db()
+    migrate(conn)
+
+    logger.info("解析 %s → DuckDB kline ...", zip_path.name)
+    raw_repo = RawRepo(conn)
+    stats = ingest_kline(zip_path, raw_repo)
+    logger.info("ingest 完成: %s", stats)
+
+    # 创建 sync_state 标记，使 phase1 可以通过门控
+    state = {
+        "confirmed_date": "auto",
+        "expected_date": "auto",
+        "zip_file": zip_path.name,
+        "confirmed_at": datetime.now().isoformat(timespec="seconds"),
+        "source": "ingest_command",
+    }
+    _SYNC_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _SYNC_STATE_FILE.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    logger.info(
+        "ingest 完成，DuckDB kline 已写入 %d 只股票。\n"
+        "下一步:\n"
+        "  python main.py collect            # 采集今日北向资金 + 龙虎榜\n"
+        "  python main.py 1                  # 特征工程（Phase 1）\n"
+        "  python main.py 2 --rolling        # 模型训练（Phase 2）\n"
+        "  python main.py 3                  # 回测（Phase 3）",
+        stats.ok,
+    )
+
+
 def sync(args):
     """同步通达信全量数据：解压 → 验证日期 → 用户确认 → 保存状态"""
     from config.settings import TDX_VIPDOC_DIR
@@ -308,24 +357,24 @@ def phase1(args):
     state = json.loads(_SYNC_STATE_FILE.read_text(encoding="utf-8"))
     logger.info(f"已确认数据截止日期: {state['confirmed_date']}  来源: {state.get('zip_file', '未知')}")
 
-    # 检查 data/raw/kline/ 是否有数据
-    kline_dir = Path(__file__).parent / "data" / "raw" / "kline"
-    kline_count = len(list(kline_dir.glob("*.parquet"))) if kline_dir.exists() else 0
+    # 检查数据来源：DuckDB 优先，兼容旧 raw/kline/ parquet
+    from src.dal.connection import get_db
+    from src.dal.raw_repo import RawRepo
+    conn = get_db()
+    raw_repo = RawRepo(conn)
+    db_kline_count = conn.execute("SELECT COUNT(DISTINCT code) FROM kline").fetchone()[0]
 
-    if kline_count == 0:
-        # 兼容旧流程：自动触发 TDX 转换（首次运行时方便使用）
-        logger.info("data/raw/kline/ 为空，自动执行 TDX 转换...")
-        from src.collectors.tdx_collector import TDXCollector
-        from src.data.tdx_reader import get_active_tdx_codes
-        tdx = TDXCollector()
-        codes = get_active_tdx_codes()
-        if args.sample:
-            codes = codes[:args.sample]
-        tdx.fetch_all(codes, incremental=True)
-        kline_count = len(list(kline_dir.glob("*.parquet")))
-        logger.info(f"TDX 转换完成，共 {kline_count} 只股票")
+    kline_dir = Path(__file__).parent / "data" / "raw" / "kline"
+    parquet_count = len(list(kline_dir.glob("*.parquet"))) if kline_dir.exists() else 0
+
+    if db_kline_count == 0 and parquet_count == 0:
+        logger.error("DuckDB kline 表和 data/raw/kline/ 均无数据。")
+        logger.error("请先运行: python main.py ingest --zip <hsjday.zip路径>")
+        return
+    elif db_kline_count > 0:
+        logger.info(f"DuckDB kline 表已有 {db_kline_count} 只股票数据")
     else:
-        logger.info(f"data/raw/kline/ 已有 {kline_count} 只股票的 K 线数据")
+        logger.info(f"使用旧 data/raw/kline/ ({parquet_count} 只 parquet 文件)")
 
     # 基本面缓存检查
     fund_dir = Path(__file__).parent / "data" / "fundamentals"
@@ -339,7 +388,6 @@ def phase1(args):
     from src.features.assembler import assemble
     df = assemble(
         sample_size=args.sample,
-        use_cache=False,
     )
     logger.info(f"Phase 1 完成，数据集形状: {df.shape}")
     logger.info(f"特征列数: {df.shape[1]}")
@@ -500,7 +548,7 @@ def scan(args):
 
 def main():
     parser = argparse.ArgumentParser(description="A 股量化交易系统")
-    parser.add_argument("phase", choices=["sync", "collect", "fetch-fund", "fetch-flow", "update", "1", "2", "3", "scan"],
+    parser.add_argument("phase", choices=["ingest", "sync", "collect", "fetch-fund", "fetch-flow", "update", "1", "2", "3", "scan"],
                         help="运行阶段：sync=同步TDX数据 | collect=采集原始数据 | fetch-fund=拉取基本面 | fetch-flow=拉取资金流向 | update=每日增量更新 | 1=特征工程 | 2=训练 | 3=回测 | scan=选股扫描")
     parser.add_argument("--zip", default=None,
                         help="sync 命令专用：通达信压缩包完整路径（如 /path/to/hsjday-2026-05-12.zip）")
@@ -532,10 +580,14 @@ def main():
                         help="update: 增量更新完成后触发 Phase 2 滚动窗口重训")
     args = parser.parse_args()
 
+    if args.phase == "ingest" and not args.zip:
+        parser.error("ingest 命令需要提供 --zip 参数，例如: python main.py ingest --zip /path/to/hsjday.zip")
+
     if args.phase == "sync" and not args.zip:
         parser.error("sync 命令需要提供 --zip 参数，例如: python main.py sync --zip /path/to/hsjday-YYYY-MM-DD.zip")
 
     phases = {
+        "ingest": ingest,
         "sync": sync,
         "collect": collect,
         "fetch-fund": fetch_fund,
