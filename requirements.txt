@@ -19,3 +19,7 @@ reportlab>=4.5.0
 
 # 数据库
 duckdb>=1.2.0
+
+# 监控仪表板
+fastapi>=0.111
+uvicorn[standard]>=0.30
