@@ -289,7 +289,7 @@ def update(args):
             "  python main.py sync --zip <压缩包>  &&  python main.py collect  &&  python main.py 1"
         )
         return
-    kline_stats = tdx.fetch_incremental_mootdx(codes, since=kline_since)
+    kline_stats = tdx.collect_mootdx(codes, since=kline_since)
     logger.info(f"K线更新：{kline_stats}")
 
     # 更新 kline 水位：只在有新数据时更新，从实际更新的股票中找最新日期
