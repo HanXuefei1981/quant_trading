@@ -1,1 +1,514 @@
-<!-- Task 7 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>量化交易监控台</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#020617;color:#e2e8f0;font-family:'SF Mono','Fira Code',monospace;font-size:13px;padding-bottom:210px}
+a{color:inherit}
+
+/* Topbar */
+.topbar{position:sticky;top:0;z-index:100;background:#0f172a;border-bottom:1px solid #1e293b;padding:10px 20px;display:flex;justify-content:space-between;align-items:center}
+.topbar-title{font-size:15px;font-weight:700;color:#f1f5f9;letter-spacing:.5px}
+.topbar-sub{font-size:11px;color:#64748b;margin-top:2px}
+.topbar-right{display:flex;align-items:center;gap:8px}
+.dot{width:9px;height:9px;border-radius:50%;background:#22c55e}
+.dot.running{background:#f59e0b;animation:pulse 1s infinite}
+.dot.err{background:#ef4444}
+.status-label{font-size:11px;color:#94a3b8}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* Layout */
+.main{padding:16px 20px;display:flex;flex-direction:column;gap:16px}
+.section-title{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
+
+/* Cards grid */
+.cards-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:900px){.cards-grid{grid-template-columns:repeat(2,1fr)}}
+.wm-card{background:#0f172a;border:1px solid #1e293b;border-left:3px solid #22c55e;border-radius:6px;padding:12px 14px}
+.wm-card.warn{border-left-color:#f59e0b}
+.wm-card.err{border-left-color:#ef4444}
+.wm-name{font-size:11px;color:#64748b;margin-bottom:6px}
+.wm-date{font-size:13px;color:#e2e8f0;font-weight:600}
+.wm-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;margin-top:4px}
+.badge-ok{background:#052e16;color:#22c55e}
+.badge-warn{background:#422006;color:#f59e0b}
+.badge-err{background:#450a0a;color:#ef4444}
+
+/* Tables */
+.tbl-wrap{background:#0f172a;border:1px solid #1e293b;border-radius:6px;overflow:auto}
+table{width:100%;border-collapse:collapse}
+th{padding:8px 12px;text-align:left;font-size:10px;color:#64748b;text-transform:uppercase;border-bottom:1px solid #1e293b;font-weight:600;white-space:nowrap}
+td{padding:7px 12px;border-bottom:1px solid #0f172a;font-size:12px;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#1e293b40}
+.ok-icon{color:#22c55e}
+.warn-icon{color:#f59e0b}
+.err-icon{color:#ef4444}
+
+/* Coverage bar */
+.cov-wrap{display:flex;align-items:center;gap:6px}
+.cov-bar-bg{width:60px;height:5px;background:#1e293b;border-radius:3px;flex-shrink:0}
+.cov-bar{height:5px;border-radius:3px;background:#3b82f6}
+
+/* Mid 3-col */
+.mid-grid{display:grid;grid-template-columns:2fr 1.1fr 1.5fr;gap:12px}
+@media(max-width:1100px){.mid-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:700px){.mid-grid{grid-template-columns:1fr}}
+
+/* Control panel */
+.ctrl-panel{background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:14px}
+.ctrl-group{margin-bottom:14px}
+.ctrl-group:last-child{margin-bottom:0}
+.ctrl-group-label{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
+.btn-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.btn{background:#0f172a;border:1px solid #334155;color:#cbd5e1;padding:7px 10px;border-radius:5px;cursor:pointer;font-family:inherit;font-size:11px;transition:all .15s;text-align:center}
+.btn:hover:not(:disabled){background:#1e293b;border-color:#475569}
+.btn.primary{grid-column:1/-1;border-color:#3b82f6;color:#93c5fd}
+.btn.primary:hover:not(:disabled){background:#172554}
+.btn.warn-btn{border-color:#d97706;color:#fbbf24}
+.btn.warn-btn:hover:not(:disabled){background:#1c1007}
+.btn.full{grid-column:1/-1}
+.btn.running{border-color:#f59e0b;color:#f59e0b;animation:pulse 1s infinite}
+.btn.done{border-color:#22c55e;color:#22c55e}
+.btn.error{border-color:#ef4444;color:#ef4444}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* Metrics panel */
+.metrics-panel{background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:14px}
+.metric-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #1e293b20}
+.metric-row:last-child{border-bottom:none}
+.metric-label{font-size:11px;color:#64748b}
+.metric-val{font-size:12px;font-weight:600}
+
+/* Chart panel */
+.chart-panel{background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:14px}
+.chart-svg-wrap{width:100%;height:140px}
+.chart-svg-wrap svg{width:100%;height:100%}
+.chart-stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}
+.stat-card{background:#020617;border:1px solid #1e293b;border-radius:5px;padding:8px 10px}
+.stat-label{font-size:10px;color:#64748b}
+.stat-val{font-size:13px;font-weight:700;margin-top:2px}
+.chart-legend{display:flex;gap:14px;margin-top:8px;font-size:10px;color:#94a3b8}
+.legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle}
+
+/* Signal table */
+.rank-badge{display:inline-block;width:22px;height:22px;border-radius:50%;font-size:10px;font-weight:700;text-align:center;line-height:22px}
+.r1{background:#b45309;color:#fef3c7}
+.r2{background:#475569;color:#e2e8f0}
+.r3{background:#92400e;color:#fef3c7}
+.rn{background:#1e293b;color:#94a3b8}
+.sig-bar-bg{width:70px;height:5px;background:#1e293b;border-radius:3px;display:inline-block;vertical-align:middle}
+.sig-bar{height:5px;border-radius:3px;background:linear-gradient(90deg,#f87171,#ef4444)}
+.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px}
+.tag-hold{background:#450a0a;color:#f87171}
+.tag-buf{background:#1e293b;color:#94a3b8}
+
+/* Log panel */
+.log-panel{position:fixed;bottom:0;left:0;right:0;height:200px;background:#020617;border-top:1px solid #1e293b;z-index:200;display:flex;flex-direction:column}
+.log-header{padding:6px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #1e293b;flex-shrink:0}
+.log-header-title{font-size:11px;color:#64748b;font-weight:600}
+.log-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;display:none}
+.log-dot.active{display:inline-block;animation:pulse 1s infinite}
+.log-body{flex:1;overflow-y:auto;padding:6px 16px}
+.log-line{font-size:11px;line-height:1.7;color:#64748b}
+.log-line .ts{color:#334155;margin-right:8px}
+.log-line.info{color:#94a3b8}
+.log-line.warn{color:#f59e0b}
+.log-line.err{color:#ef4444}
+.log-line.out{color:#94a3b8}
+</style>
+</head>
+<body>
+
+<!-- 1. Topbar -->
+<div class="topbar">
+  <div>
+    <div class="topbar-title">⚡ 量化交易监控台</div>
+    <div class="topbar-sub" id="topbar-sub">A股 · 加载中...</div>
+  </div>
+  <div class="topbar-right">
+    <div class="dot" id="status-dot"></div>
+    <span class="status-label" id="status-label">空闲</span>
+  </div>
+</div>
+
+<div class="main">
+
+<!-- 2. 数据水位 -->
+<div>
+  <div class="section-title">数据水位</div>
+  <div class="cards-grid" id="wm-grid">
+    <div class="wm-card"><div class="wm-name">加载中...</div></div>
+  </div>
+</div>
+
+<!-- 3. 数据接口状态 -->
+<div>
+  <div class="section-title">数据接口状态</div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>接口</th><th>因子</th><th>命令</th><th>覆盖率</th><th>状态</th><th>备注</th></tr></thead>
+      <tbody>
+        <tr><td>TDX .day 文件</td><td>OHLCV/复权</td><td><code>ingest/update</code></td><td>100%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
+        <tr><td>akshare 财务数据</td><td>PE/PB/市值</td><td><code>collect</code></td><td>~91.8%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
+        <tr><td>akshare 北向资金</td><td>north_net</td><td><code>collect</code></td><td>66.7%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
+        <tr><td>东方财富 资金流向</td><td>major_net</td><td><code>fetch-flow</code></td><td>~10.1%</td><td><span class="warn-icon">△</span></td><td>需关VPN</td></tr>
+        <tr><td>东方财富 龙虎榜</td><td>lhb_net_buy</td><td><code>collect</code></td><td>~45%</td><td><span class="warn-icon">△</span></td><td>历史回填中</td></tr>
+        <tr><td>腾讯基本面</td><td>EPS/净利/ROE</td><td><code>fetch-fund</code></td><td>0%</td><td><span class="err-icon">✗</span></td><td>接口待调试</td></tr>
+        <tr><td>研报评级</td><td>report_rating</td><td>—</td><td>0%</td><td><span class="err-icon">✗</span></td><td>数据源待选</td></tr>
+        <tr><td>mootdx TCP增量</td><td>K线增量</td><td><code>update</code></td><td>100%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 4. 特色因子 -->
+<div>
+  <div class="section-title">特色因子</div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>因子名</th><th>分类</th><th>接口</th><th>覆盖率</th><th>说明</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>north_net_5d</td><td>北向资金</td><td>akshare</td><td><div class="cov-wrap"><span>66.7%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:66.7%"></div></div></div></td><td>5日北向净买入</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>north_net_trend</td><td>北向资金</td><td>akshare</td><td><div class="cov-wrap"><span>66.7%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:66.7%"></div></div></div></td><td>20日线性回归</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>lhb_net_buy</td><td>龙虎榜</td><td>东方财富</td><td><div class="cov-wrap"><span>45%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:45%"></div></div></div></td><td>机构/游资净买入</td><td><span class="warn-icon">△</span></td></tr>
+        <tr><td>major_net_buy_1d</td><td>主力资金</td><td>东方财富</td><td><div class="cov-wrap"><span>10.1%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:10.1%"></div></div></div></td><td>当日主力净流入</td><td><span class="err-icon">✗</span></td></tr>
+        <tr><td>major_net_buy_5d</td><td>主力资金</td><td>东方财富</td><td><div class="cov-wrap"><span>10.1%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:10.1%"></div></div></div></td><td>5日主力净流入</td><td><span class="err-icon">✗</span></td></tr>
+        <tr><td>pe_ttm</td><td>基本面</td><td>akshare</td><td><div class="cov-wrap"><span>91.8%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:91.8%"></div></div></div></td><td>市盈率TTM</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>pb / market_cap</td><td>基本面</td><td>akshare</td><td><div class="cov-wrap"><span>91.8%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:91.8%"></div></div></div></td><td>市净率/流通市值</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>eps_yoy</td><td>研报/EPS</td><td>腾讯(待建)</td><td><div class="cov-wrap"><span>0%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:0%"></div></div></div></td><td>EPS同比增长</td><td><span class="err-icon">✗</span></td></tr>
+        <tr><td>report_rating</td><td>研报/EPS</td><td>待选型</td><td><div class="cov-wrap"><span>0%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:0%"></div></div></div></td><td>分析师评级</td><td><span class="err-icon">✗</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 5. Mid 3-column -->
+<div class="mid-grid">
+
+  <!-- Col 1: 流程控制台 -->
+  <div class="ctrl-panel">
+    <div class="section-title">流程控制台</div>
+
+    <div class="ctrl-group">
+      <div class="ctrl-group-label">数据采集</div>
+      <div class="btn-grid">
+        <button id="btn-update" class="btn primary" onclick="runCmd('update')">日常增量一键</button>
+        <button id="btn-ingest" class="btn" onclick="runCmd('ingest')">全量导入</button>
+        <button id="btn-collect" class="btn" onclick="runCmd('collect')">基本面/北向</button>
+        <button id="btn-fetch-fund" class="btn warn-btn" onclick="runCmd('fetch-fund')">腾讯基本面 ⚠VPN</button>
+        <button id="btn-fetch-flow" class="btn warn-btn" onclick="runCmd('fetch-flow')">资金流向 ⚠VPN</button>
+      </div>
+    </div>
+
+    <div class="ctrl-group">
+      <div class="ctrl-group-label">特征工程</div>
+      <div class="btn-grid">
+        <button id="btn-phase1" class="btn full" onclick="runCmd('phase1')">Phase 1 特征计算</button>
+      </div>
+    </div>
+
+    <div class="ctrl-group">
+      <div class="ctrl-group-label">模型训练</div>
+      <div class="btn-grid">
+        <button id="btn-phase2-rolling" class="btn" onclick="runCmd('phase2-rolling')">Phase 2 滚动</button>
+        <button id="btn-phase2-final" class="btn" onclick="runCmd('phase2-final')">Phase 2 全量</button>
+      </div>
+    </div>
+
+    <div class="ctrl-group">
+      <div class="ctrl-group-label">组合回测</div>
+      <div class="btn-grid">
+        <button id="btn-phase3" class="btn" onclick="runCmd('phase3')">Phase 3 回测</button>
+        <button id="btn-scan" class="btn" onclick="runCmd('scan')">Scan Top-50</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Col 2: 模型指标 -->
+  <div class="metrics-panel">
+    <div class="section-title">模型指标</div>
+    <div id="metrics-body">
+      <div class="metric-row"><span class="metric-label">加载中...</span></div>
+    </div>
+  </div>
+
+  <!-- Col 3: 回测权益曲线 -->
+  <div class="chart-panel">
+    <div class="section-title">回测权益曲线</div>
+    <div class="chart-svg-wrap" id="chart-wrap">
+      <svg id="chart-svg" viewBox="0 0 400 130" preserveAspectRatio="none">
+        <text x="200" y="70" text-anchor="middle" fill="#334155" font-size="11">暂无数据</text>
+      </svg>
+    </div>
+    <div class="chart-legend">
+      <span><span class="legend-dot" style="background:#f87171"></span>策略</span>
+      <span><span class="legend-dot" style="background:#475569"></span>基准</span>
+    </div>
+    <div class="chart-stats" id="chart-stats">
+      <div class="stat-card"><div class="stat-label">超额收益</div><div class="stat-val" id="st-excess">—</div></div>
+      <div class="stat-card"><div class="stat-label">最大回撤</div><div class="stat-val" id="st-dd">—</div></div>
+      <div class="stat-card"><div class="stat-label">夏普比率</div><div class="stat-val" id="st-sharpe">—</div></div>
+      <div class="stat-card"><div class="stat-label">回测区间</div><div class="stat-val" id="st-period" style="font-size:10px;color:#94a3b8">—</div></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 6. 选股信号 -->
+<div>
+  <div class="section-title">选股信号 <span id="scan-meta" style="color:#334155;font-size:10px"></span></div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>代码</th><th>板块</th><th>收盘价</th><th>信号值</th><th>分位</th><th>主力流入</th><th>状态</th></tr></thead>
+      <tbody id="scan-body">
+        <tr><td colspan="8" style="text-align:center;color:#334155;padding:20px">暂无信号数据</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</div><!-- .main -->
+
+<!-- 7. Log panel -->
+<div class="log-panel">
+  <div class="log-header">
+    <span class="log-header-title">执行日志</span>
+    <div class="log-dot" id="log-dot"></div>
+    <span id="log-cmd" style="font-size:11px;color:#475569"></span>
+  </div>
+  <div class="log-body" id="log-body">
+    <div class="log-line">等待命令执行...</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const finColor = v => v==null?'#94a3b8':v>0?'#f87171':v<0?'#4ade80':'#94a3b8';
+const pct = v => v==null?'—':(v*100).toFixed(1)+'%';
+const fmtNum = (v,d=3) => v==null?'—':v.toFixed(d);
+const escHtml = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const now = () => new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+// --- Watermarks ---
+function renderWatermarks(wm) {
+  if (!wm) return;
+  const defs = [
+    {key:'kline',       label:'K线行情'},
+    {key:'features',    label:'特征工程'},
+    {key:'northbound',  label:'北向资金'},
+    {key:'fundamentals',label:'基本面数据'},
+    {key:'fund_flow',   label:'资金流向'},
+    {key:'models',      label:'模型文件'},
+  ];
+  const grid = $('wm-grid');
+  grid.innerHTML = defs.map(d => {
+    const v = wm[d.key] || {};
+    const st = v.status || 'err';
+    const dateStr = v.date || (v.count != null ? `${v.count}只 · ${pct(v.coverage)}` : '—');
+    return `<div class="wm-card ${st}">
+      <div class="wm-name">${d.label}</div>
+      <div class="wm-date">${escHtml(dateStr)}</div>
+      <span class="wm-badge badge-${st}">${st==='ok'?'正常':st==='warn'?'警告':'异常'}</span>
+    </div>`;
+  }).join('');
+}
+
+// --- Metrics ---
+function renderMetrics(m) {
+  if (!m) { $('metrics-body').innerHTML='<div class="metric-row"><span class="metric-label" style="color:#334155">无数据</span></div>'; return; }
+  const rows = [
+    ['训练集 IC', fmtNum(m.train_ic), finColor(m.train_ic)],
+    ['验证集 IC', fmtNum(m.val_ic),   finColor(m.val_ic)],
+    ['测试集 IC', fmtNum(m.test_ic),  finColor(m.test_ic)],
+    ['准确率',    pct(m.val_accuracy), '#60a5fa'],
+    ['F1',        fmtNum(m.val_f1),   '#60a5fa'],
+    ['LGBM权重',  fmtNum(m.w_lgbm),   '#94a3b8'],
+    ['Ridge权重', fmtNum(m.w_ridge),  '#94a3b8'],
+    ['因子数',    m.n_features!=null?String(m.n_features):'—', '#94a3b8'],
+    ['上次训练',  m.last_train||'—',  '#334155'],
+  ];
+  $('metrics-body').innerHTML = rows.map(([label,val,color])=>
+    `<div class="metric-row"><span class="metric-label">${label}</span><span class="metric-val" style="color:${color}">${escHtml(val)}</span></div>`
+  ).join('');
+}
+
+// --- SVG Chart ---
+function drawSvgChart(dates, strategy, benchmark) {
+  if (!dates || dates.length < 2) return;
+  const W=400, H=130, pad={t:10,r:10,b:20,l:40};
+  const iW=W-pad.l-pad.r, iH=H-pad.t-pad.b;
+  const all=[...strategy,...benchmark].filter(v=>v!=null);
+  const minV=Math.min(...all), maxV=Math.max(...all);
+  const rangeV=maxV-minV||1;
+  const toX=i=>pad.l+i/(dates.length-1)*iW;
+  const toY=v=>pad.t+iH-(v-minV)/rangeV*iH;
+  const poly=arr=>arr.map((v,i)=>`${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+
+  // y-axis ticks
+  const ticks=[minV,(minV+maxV)/2,maxV];
+  const yticks=ticks.map(v=>`<line x1="${pad.l}" y1="${toY(v).toFixed(1)}" x2="${W-pad.r}" y2="${toY(v).toFixed(1)}" stroke="#1e293b" stroke-width="1"/><text x="${pad.l-4}" y="${toY(v)+4}" text-anchor="end" fill="#334155" font-size="8">${(v*100).toFixed(0)}%</text>`).join('');
+
+  const svg=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:100%">
+    ${yticks}
+    <polyline points="${poly(benchmark)}" fill="none" stroke="#475569" stroke-width="1.5" stroke-linejoin="round"/>
+    <polyline points="${poly(strategy)}" fill="none" stroke="#f87171" stroke-width="2" stroke-linejoin="round"/>
+  </svg>`;
+  $('chart-wrap').innerHTML=svg;
+}
+
+function renderChart(bt) {
+  if (!bt) return;
+  drawSvgChart(bt.dates, bt.strategy, bt.benchmark);
+  $('st-excess').style.color=finColor(bt.excess_return);
+  $('st-excess').textContent=pct(bt.excess_return);
+  $('st-dd').style.color='#4ade80';
+  $('st-dd').textContent=pct(bt.max_drawdown);
+  $('st-sharpe').style.color='#60a5fa';
+  $('st-sharpe').textContent=fmtNum(bt.sharpe,2);
+  $('st-period').textContent=bt.period_start&&bt.period_end?`${bt.period_start}~${bt.period_end}`:'—';
+}
+
+// --- Scan signals ---
+function renderScan(sc) {
+  if (!sc) return;
+  if (sc.date) $('scan-meta').textContent=`${sc.date}  Top-${sc.top_n||50}`;
+  const sigs=sc.signals||[];
+  if (!sigs.length) { $('scan-body').innerHTML='<tr><td colspan="8" style="text-align:center;color:#334155;padding:20px">暂无信号</td></tr>'; return; }
+  $('scan-body').innerHTML=sigs.map(s=>{
+    const ri=s.rank<=1?'r1':s.rank<=2?'r2':s.rank<=3?'r3':'rn';
+    const barW=Math.min(100,Math.max(0,(s.signal_pct||0)*100));
+    const ffColor=finColor(s.fund_flow);
+    const stTag=s.status==='hold'?`<span class="tag tag-hold">hold</span>`:`<span class="tag tag-buf">${escHtml(s.status||'—')}</span>`;
+    return `<tr>
+      <td><span class="rank-badge ${ri}">${s.rank}</span></td>
+      <td style="color:#e2e8f0;font-weight:600">${escHtml(s.code)}</td>
+      <td style="color:#64748b">${escHtml(s.segment||'—')}</td>
+      <td>${s.close!=null?s.close.toFixed(2):'—'}</td>
+      <td><div style="display:flex;align-items:center;gap:6px"><span style="color:#f87171">${fmtNum(s.signal)}</span><div class="sig-bar-bg"><div class="sig-bar" style="width:${barW}%"></div></div></div></td>
+      <td style="color:#94a3b8">${pct(s.signal_pct)}</td>
+      <td style="color:${ffColor}">${s.fund_flow!=null?(s.fund_flow>0?'+':'')+s.fund_flow.toFixed(0)+'万':'—'}</td>
+      <td>${stTag}</td>
+    </tr>`;
+  }).join('');
+}
+
+// --- Topbar update ---
+function updateTopbar(m, wm) {
+  const statuses=wm?Object.values(wm).map(v=>v.status):[];
+  const hasErr=statuses.includes('err');
+  const hasWarn=statuses.includes('warn');
+  const dot=$('status-dot');
+  if (!activeTask) {
+    dot.className='dot'+(hasErr?' err':hasWarn?' warn':'');
+    $('status-label').textContent=hasErr?'异常':hasWarn?'警告':'正常';
+  }
+  const dateStr=wm&&wm.kline?wm.kline.date:'—';
+  $('topbar-sub').textContent=`A股 · 最新: ${dateStr}`;
+}
+
+// --- Load status ---
+async function loadStatus() {
+  try {
+    const data=await fetch('/api/status').then(r=>r.json());
+    renderWatermarks(data.watermarks);
+    renderMetrics(data.metrics);
+    renderChart(data.backtest);
+    renderScan(data.scan);
+    updateTopbar(data.metrics, data.watermarks);
+  } catch(e) {
+    appendLog({ts:now(),level:'err',msg:'状态加载失败: '+e.message});
+  }
+}
+
+// --- Log ---
+function appendLog(d) {
+  const body=$('log-body');
+  const lvl=d.level||'out';
+  const line=document.createElement('div');
+  line.className=`log-line ${lvl}`;
+  line.innerHTML=`<span class="ts">${d.ts||now()}</span>${escHtml(d.msg||d.line||'')}`;
+  body.appendChild(line);
+  body.scrollTop=body.scrollHeight;
+}
+
+// --- Status dot ---
+let activeTask=null;
+function setStatusDot(st, cmd) {
+  const dot=$('status-dot');
+  const label=$('status-label');
+  const logDot=$('log-dot');
+  const logCmd=$('log-cmd');
+  if (st==='running') {
+    dot.className='dot running';
+    label.textContent=cmd||'运行中';
+    logDot.className='log-dot active';
+    logCmd.textContent=cmd||'';
+  } else {
+    dot.className='dot';
+    label.textContent='空闲';
+    logDot.className='log-dot';
+    logCmd.textContent='';
+  }
+}
+
+// --- Run command ---
+async function runCmd(cmd) {
+  if (activeTask) { appendLog({ts:now(),level:'warn',msg:'任务进行中，请等待完成'}); return; }
+  const btn=$('btn-'+cmd);
+  btn.classList.add('running');
+  setStatusDot('running', cmd);
+  $('log-body').innerHTML='';
+  appendLog({ts:now(),level:'info',msg:`启动命令: ${cmd}`});
+
+  let res;
+  try {
+    res=await fetch('/api/run/'+cmd,{method:'POST'});
+  } catch(e) {
+    appendLog({ts:now(),level:'err',msg:'网络错误: '+e.message});
+    btn.classList.remove('running'); setStatusDot('idle'); return;
+  }
+  if (!res.ok) {
+    let err='';
+    try { const j=await res.json(); err=j.detail||JSON.stringify(j); } catch(_){}
+    appendLog({ts:now(),level:'warn',msg:err||`HTTP ${res.status}`});
+    btn.classList.remove('running'); setStatusDot('idle'); return;
+  }
+  const {task_id}=await res.json();
+  activeTask=task_id;
+
+  const es=new EventSource('/api/stream/'+task_id);
+  es.onmessage=e=>{
+    let d;
+    try { d=JSON.parse(e.data); } catch(_){ appendLog({ts:now(),level:'out',msg:e.data}); return; }
+    if (d.type==='done') {
+      es.close(); activeTask=null;
+      btn.classList.remove('running');
+      btn.classList.add(d.exit_code===0?'done':'error');
+      setStatusDot('idle');
+      appendLog({ts:now(),level:d.exit_code===0?'info':'err',msg:`命令结束 exit=${d.exit_code}`});
+      setTimeout(()=>{btn.classList.remove('done','error');}, 4000);
+      loadStatus();
+      return;
+    }
+    appendLog(d);
+  };
+  es.onerror=()=>{
+    if (!activeTask) return;
+    es.close(); activeTask=null;
+    btn.classList.remove('running'); btn.classList.add('error');
+    setStatusDot('idle');
+    appendLog({ts:now(),level:'err',msg:'SSE 连接中断'});
+    setTimeout(()=>{btn.classList.remove('error');}, 4000);
+  };
+}
+
+// Init
+loadStatus();
+setInterval(loadStatus, 30000);
+</script>
+</body>
+</html>
