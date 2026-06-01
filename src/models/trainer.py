@@ -67,9 +67,10 @@ def prepare_xy_regression(
     return X, y
 
 
-# 温和类别权重：轻度提升"涨"召回，保持"震荡"预测能力
-# 0=跌, 1=震荡, 2=涨；cross-sectional标签各约30/40/30%
-_CLASS_WEIGHTS: dict[int, float] = {0: 1.0, 1: 0.8, 2: 1.5}
+# 中性类别权重：标签按截面 30/40/30 分位构造，本身均衡，无需人为加权。
+# 旧值 {0:1.0, 1:0.8, 2:1.5} 人为偏向"涨"，扭曲概率输出（涨 recall↑ 但 precision↓），
+# 对排名 IC 有害无益，故中性化以恢复校准。0=跌, 1=震荡, 2=涨。
+_CLASS_WEIGHTS: dict[int, float] = {0: 1.0, 1: 1.0, 2: 1.0}
 
 _LGBM_PARAMS: dict = {
     "objective": "multiclass",

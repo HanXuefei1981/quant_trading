@@ -4,6 +4,9 @@
 
 基于 **LightGBM + Ridge 集成模型** 的 A 股多因子选股策略，覆盖数据同步、特征工程、模型训练、组合回测和实时扫描的完整闭环。**面向散户实战可执行**。
 
+📖 **[程序执行手册](docs/执行手册.md)** — 首次建库、日常增量更新、选股扫描的完整操作步骤与全参数说明
+📊 **[特征表数据覆盖说明书](docs/特征表数据覆盖说明书.md)** — features 表每列的来源、覆盖范围与 NULL 成因，建模/回测前查字段可用性
+
 ---
 
 ## 设计理念
@@ -26,41 +29,58 @@ A 股是散户主导的情绪市场，相对于美股需要更注重：
         ▼
    .sync_state.json（门控状态）
         │
+        ├─→ python main.py collect [--refresh]   # TDX .day → parquet（首次/强制全量）
+        │
         │ python main.py fetch-fund               # 拉取基本面（PE/PB/市值等）
         ▼
    data/fundamentals/{code}.parquet
         │
-        │ python main.py 1                        # 特征工程：56 个因子
+        │ python main.py 1                        # 特征工程：62 个因子
         ▼
    data/processed/market_features.parquet
         │
-        │ python main.py 2                        # LightGBM 三分类 + Ridge 集成
+        │ python main.py 2 [--rolling]            # LightGBM 三分类 + Ridge 集成
         ▼
    data/models/{lgbm,ridge,ensemble_meta}.json/.joblib
         │
         ├─→ python main.py 3                      # Top-K 组合回测
         │     data/backtest/{equity_curve,trades,report}
         │
-        └─→ python main.py scan --top-k 10        # 散户实战：最新截面 Top-K
-              data/backtest/scan_YYYY-MM-DD.csv
+        └─→ python main.py fetch-basic            # 拉取股票名称/行业（scan 富信息表用，一次即可）
+              │
+              └─→ python main.py scan --top-k 10   # 散户实战：最新截面 Top-K（含名称/行业/估值/财务）
+                    data/backtest/scan_YYYY-MM-DD.csv
+
+   # 日常增量更新（无需新 zip，关 VPN + 有效 tushare token）
+   python main.py update          # tushare 批量拉当日 K 线 + 北向
+   python main.py fetch-fund      # 基本面增量（亦可 --since 回填缺口）
+   python main.py fetch-flow      # 资金流向 + 北向增量
+   python main.py 1               # 增量重建特征到最新交易日
+   python main.py scan            # 最新推荐
 ```
 
 ---
 
-## 五大子命令
+## 子命令一览
 
 | 命令 | 用途 | 关键说明 |
 |------|------|---------|
 | `python main.py sync --zip <path>` | 同步通达信压缩包 | 解析文件名日期 -1 作为期望截止，与实际数据核对，需用户确认才能进入 phase1 |
-| `python main.py fetch-fund [--sample N] [--delay S]` | 拉取基本面缓存 | 自动过滤退市股，每只 PE/PB/市值/换手率，缓存到 `data/fundamentals/` |
-| `python main.py 1 [--sample N]` | Phase 1：数据 + 特征 | 通达信 K 线 + 基本面合并 → 56 个因子（含 10 个基本面因子）|
-| `python main.py 2` | Phase 2：模型训练 | LightGBM 三分类 + Ridge 回归，按 IC 加权集成 |
+| `python main.py collect [--refresh]` | TDX .day → parquet | 默认跳过已有文件；`--refresh` 强制全量重转换（更新已有股票数据必须用此参数）|
+| `python main.py fetch-fund [--since YYYY-MM-DD] [--delay S]` | 按交易日批量拉取基本面 | tushare `daily_basic`，单次取全市场当日快照（快约 5000×）→ DuckDB `fundamentals`；`--since` 从次日起回填缺口（幂等 INSERT OR REPLACE）|
+| `python main.py fetch-flow [--delay S]` | 拉取资金流向 + 北向 | tushare `moneyflow` 批量 → `fund_flow`，含北向 `moneyflow_hsgt`（T+1）|
+| `python main.py fetch-financial` | 拉取财务指标 | ROE/ROA/毛利率/净利率/营收/净利润等 → `financial_indicator`（季频）|
+| `python main.py fetch-reports` | 拉取研报 / EPS 共识 | → `reports` / `eps_snapshot` |
+| `python main.py fetch-basic` | 拉取股票名称 / 行业 | tushare `stock_basic` → DuckDB `stock_basic`，供 scan 关联名称与行业；名称/行业变动少，需要时手动重跑刷新 |
+| `python main.py 1 [--sample N]` | Phase 1：数据 + 特征 | K 线 + 基本面 + 信号合并 → 因子；逐日流式预处理写表（低内存）|
+| `python main.py 2 [--rolling] [--final]` | Phase 2：模型训练 | LightGBM 三分类 + Ridge 回归，按 IC 加权集成；`--rolling` 滚动窗口，`--final` 全量重训生产模型 |
 | `python main.py 3 [--top-k 50 --rebalance 5]` | Phase 3：组合回测 | 含费率、板块上限、换手率上限 |
-| `python main.py scan --top-k 10 [--replace-only]` | 实时扫描 | 用最新截面（无标签）出 Top-K 候选，散户模式 `replace_only` 只换被淘汰股 |
+| `python main.py scan --top-k 10 [--replace-only]` | 实时扫描 | 用最新截面（无标签）出 Top-K 候选；输出含名称/行业/估值（PE/PB/PS/市值）/财务（ROE/净利同比）的富信息表，存 `data/backtest/scan_YYYY-MM-DD.csv`（需先 `fetch-basic` 才有名称/行业）|
+| `python main.py update` | 日常增量更新 | tushare 批量拉当日全市场 K 线 + 北向（T+1）；随后跑 `1` 增量重建特征 |
 
 ---
 
-## 因子体系（共 56 个）
+## 因子体系（共 62 个）
 
 ### 技术因子（46 个）
 
@@ -83,7 +103,18 @@ A 股是散户主导的情绪市场，相对于美股需要更注重：
 | `float_shares_chg20` | 流通股本 20 日变化（增发/回购痕迹） |
 | `peg_value` | PEG 值 |
 
-> ⚠️ 基本面因子代码已实施，**模型重训进行中**（fetch-fund 全量拉取 5641 只股票约 10 小时）。下面"模型评估"段为重训前的旧模型基线。
+### 量价信号因子（6 个，M3）
+
+| 因子 | 含义 | 覆盖率 |
+|------|------|--------|
+| `north_net_5d` | 北向资金 5 日净买入 | 66.7% |
+| `north_net_trend` | 北向资金趋势方向 | 66.7% |
+| `lhb_net_buy_30d` | 龙虎榜 30 日净买入额 | 部分 |
+| `lhb_count_30d` | 龙虎榜 30 日上榜次数 | 部分 |
+| `eps_consensus_cur` | EPS 一致预期（待积累） | ~0%* |
+| `report_count_30d` | 研报数量 30 日（待验证） | 部分* |
+
+> \* `eps_consensus_cur` / `report_count_30d` / `analyst_count` 当前已排除训练，待月度快照积累后重新验证。
 
 ---
 
@@ -96,15 +127,24 @@ A 股是散户主导的情绪市场，相对于美股需要更注重：
 
 ---
 
-## 模型评估（基线版，未含基本面）
+## 模型评估（2026-05-19 重训，含基本面 + 北向因子）
 
 | 集合 | 样本量 | 准确率 | F1 | IC |
 |------|--------|--------|------|------|
-| 训练集 | 4,415,306 | 0.466 | 0.403 | **0.1135** |
-| 验证集 | 1,031,190 | 0.462 | 0.391 | **0.0606** |
-| 测试集 | 999,168 | 0.458 | 0.381 | **0.0211** |
+| 训练集 | ~4.5M | — | — | **0.1240** |
+| 验证集 | ~1M | — | — | **0.0807** |
+| 测试集 | ~1M | — | — | **0.0197** |
 
-> IC 在验证集仍处于 0.05 之上的有效阈值，但测试集衰减明显，是接下来加入基本面因子的重要动机。
+> 验证集 IC 较上一版（0.0723）提升 11.6%，测试集 IC 较上一版（0.0150）提升 31%。
+
+### Phase 3 回测表现（截至 2026-05-25 清洗后数据）
+
+| 指标 | 策略 | 基准（等权全市场）|
+|------|------|------|
+| 总收益率 | **62.94%** | 47.85% |
+| 超额收益 | +15.09% | — |
+
+> 回测数据经过数据清洗：剔除 40 只借壳重组股（借壳导致单日 50,000%+ 异常涨幅），还原真实市场基准。
 
 ---
 
@@ -112,7 +152,9 @@ A 股是散户主导的情绪市场，相对于美股需要更注重：
 
 ### scan 命令
 
-输出当前最新截面的 Top-K 候选清单（CSV 格式），含板块、信号值、全市场分位。
+输出当前最新截面的 Top-K 候选清单，控制台为全中文富信息表、同时存 CSV。字段：排名 / 代码 / 名称 / 行业 / 收盘价 / 信号值 / 信号分位 / 总市值(亿) / 市盈率 / 市净率 / 市销率 / 净资收益率 / 净利润同比。前 K 只为建仓候选、K+1~K×1.5 为观察缓冲区。
+
+> 名称/行业来自 `stock_basic` 表，首次使用前需先运行 `python main.py fetch-basic`（之后偶尔刷新即可）；估值取当日 `fundamentals`、财务取最新 `financial_indicator`。
 
 `--replace-only` 模式（推荐散户）：
 - 持仓股只要仍在 Top-(K × 1.5) 缓冲池内**就不动**
@@ -131,40 +173,61 @@ A 股是散户主导的情绪市场，相对于美股需要更注重：
 ```
 quant_trading/
 ├── config/
-│   └── settings.py             # 全局参数（日期范围、阈值、过滤规则）
+│   └── settings.py             # 全局参数（日期范围、阈值、过滤规则、EXCLUDE_KCYB、DB_PATH）
 ├── src/
+│   ├── collectors/             # 数据采集器（tushare 私有代理 → DuckDB）
+│   │   ├── base.py             # BaseCollector + CollectStats
+│   │   ├── tdx_collector.py    # 全市场批量 K 线（tushare daily，update 用）
+│   │   ├── fundamental_collector.py  # 基本面 daily_basic（collect_batch 按日批量）
+│   │   ├── fund_flow_collector.py    # 资金流向 moneyflow
+│   │   ├── northbound_collector.py   # 北向资金 moneyflow_hsgt（T+1）
+│   │   ├── signal_collector.py       # 龙虎榜 top_list（collect 当日 / backfill 回填）
+│   │   ├── report_collector.py       # 研报 report_rc + EPS 共识
+│   │   ├── financial_collector.py    # 财务指标 fina_indicator
+│   │   └── tencent_collector.py      # 腾讯财经 PE/PB 快照（可选）
+│   ├── dal/                    # 数据访问层（DuckDB 单写多读）
+│   │   ├── connection.py       # 连接单例 get_db（支持 read_only）
+│   │   ├── schema.py           # 建表 migrate（kline/fundamentals/features/stock_basic …）
+│   │   ├── raw_repo.py         # 原始表读写（含 nullable→float64 防御）
+│   │   ├── feature_repo.py     # features 表读写（ON CONFLICT upsert）
+│   │   └── meta_repo.py        # 水位（collect_log）读写
 │   ├── data/
+│   │   ├── tushare_client.py   # tushare Pro 初始化 + 私有代理 URL（关 VPN 运行）
+│   │   ├── tushare_fetchers.py # 各类 tushare 拉取函数（K线/基本面/资金流/北向/龙虎榜/研报/财务/stock_basic）
+│   │   ├── ingest_zip.py       # 通达信 hsjday.zip → DuckDB kline 直接解析
 │   │   ├── tdx_reader.py       # 通达信 .day 解析 + 退市股过滤
-│   │   ├── pipeline.py         # Phase 1 主流程 + 基本面合并
-│   │   ├── fundamentals.py     # akshare 基本面拉取（PE/PB/市值）
-│   │   ├── stock_filter.py     # ST 股票列表（akshare 缓存）
-│   │   └── fetcher.py          # akshare K 线（备用数据源）
+│   │   ├── watermark.py        # 水位管理（data/watermark.json）
+│   │   ├── pipeline.py         # Phase 2/3 特征加载（从 features 表，过滤无标签行）
+│   │   ├── stock_filter.py     # ST / *ST 列表（akshare 缓存，scan/回测过滤用）
+│   │   └── fundamentals.py · fetcher.py · fund_flow.py  # 旧 akshare 数据源（已被 tushare 取代，保留备用）
 │   ├── features/
-│   │   ├── indicators.py       # 56 个因子计算
-│   │   ├── label.py            # 截面分位标签
-│   │   └── preprocessing.py    # MAD + 板块中性化 + Z-score
+│   │   ├── indicators.py       # 技术因子计算
+│   │   ├── label.py            # 截面分位标签（top/bottom 30%）
+│   │   ├── preprocessing.py    # MAD 去极值 + 板块中性化 + Z-score
+│   │   ├── signal.py           # 量价信号因子（北向/龙虎榜/研报）
+│   │   ├── report.py           # 研报 / EPS 因子
+│   │   ├── assembler.py        # 多源合并 + 逐日流式预处理写表（assemble / incremental / inference）
+│   │   └── scan_enrich.py      # scan 富信息拼装（名称/行业 + 估值 + 财务）
 │   ├── models/
-│   │   ├── trainer.py          # LightGBM + Ridge 集成
+│   │   ├── trainer.py          # LightGBM + Ridge 集成（rolling / walk-forward / final）
 │   │   └── evaluator.py        # IC / 方向准确率 / F1
 │   ├── backtest/
-│   │   ├── engine.py           # 回测引擎 + 信号生成
+│   │   ├── engine.py           # 回测引擎 + 信号生成 + 等权基准
 │   │   ├── portfolio.py        # 目标权重 + 板块上限 + 换手率限制
 │   │   └── metrics.py          # 夏普 / 卡玛 / 回撤报告
 │   └── utils/
 │       └── logger.py
-├── tests/                       # pytest 测试套件（9 个测试模块）
-├── scripts/                     # 实验与稽核工具
-│   ├── audit_tdx_data.py       # 通达信数据完整性稽核
-│   ├── g1_no_vol_features.py   # 实验：屏蔽波动率因子
-│   ├── g2_cross_sectional_label.py
-│   └── gen_*.py
+├── tests/                       # pytest 测试套件
+├── scripts/                     # 稽核 / 实验脚本（audit_tdx_data、gen_* 等）
 ├── docs/
-│   └── dev-log/                # 按日开发日志（README 含规范）
-├── data/                        # 本地数据（部分 .gitignore）
-│   ├── fundamentals/           # 基本面缓存（ignored）
-│   ├── processed/              # 特征数据（ignored，约 5GB）
-│   ├── models/                 # 模型权重 + 评估结果
-│   └── backtest/               # 回测产物（ignored）
+│   ├── 执行手册.md              # 全流程操作手册
+│   ├── 特征表数据覆盖说明书.md   # features 表字段来源/覆盖/NULL 成因
+│   └── dev-log/                # 按日开发日志
+├── data/
+│   ├── quant.duckdb             # 中央数据库（DB_PATH，常置于外置盘；raw + features 全在此）
+│   ├── watermark.json           # 各源采集水位
+│   ├── models/                  # 模型权重 + 评估结果
+│   └── backtest/                # 回测产物 + scan_YYYY-MM-DD.csv
 └── main.py                      # 统一入口
 ```
 
@@ -206,6 +269,10 @@ INITIAL_CAPITAL = 1_000_000          # 100 万初始资金
 按日记录每次变更：动机、影响范围、验证方式、待跟进。详见 [`docs/dev-log/README.md`](docs/dev-log/README.md)。
 
 最近变更：
+- [2026-06-01](docs/dev-log/2026-06-01.md)：Phase1 逐日流式预处理（省 ~8GB 内存）+ 修复 9 个陈旧测试 + 基本面缺口补全（fetch-fund --since）+ 滚动重训回测（夏普 2.57）+ scan 富信息表（fetch-basic）+ 同步至 05-29 + 特征表数据覆盖说明书
+- [2026-05-20](docs/dev-log/2026-05-20-m3-ic-validation.md)：M3 因子 IC 验收；北向 bug 修复；EPS/研报/LHB 因子效果分析，暂排除出训练
+- [2026-05-19](docs/dev-log/2026-05-19.md)：修复 sync macOS 解压 Windows zip 路径 bug；全量数据更新（TDX 至 2026-05-18）；测试集 IC 提升 31%
+- [2026-05-18](docs/dev-log/2026-05-18.md)：资金流向本地下载脚本（TDD 全流程，14 个测试）
 - [2026-05-13](docs/dev-log/2026-05-13.md)：引入基本面因子 + 建立开发日志制度
 - [2026-05-12](docs/dev-log/2026-05-12.md)：sync 数据 + Top-10 扫描 + 散户交易手册
 - [2026-05-11](docs/dev-log/2026-05-11.md)：sync 命令 + ST/科创板过滤 + scan 推断模式
@@ -214,12 +281,13 @@ INITIAL_CAPITAL = 1_000_000          # 100 万初始资金
 
 ## 待改进方向
 
-- [ ] **全量重训**：fetch-fund 完成后跑 phase1+phase2，验证基本面因子能否显著提升 IC
-- [ ] **资金流向因子**（基本面第二步）：北向资金、主力资金净流入、融资余额变化
-- [ ] **事件驱动因子**：大股东增减持、回购、商誉减值预警
-- [ ] **NLP 情绪因子**：股吧讨论热度、新闻情感、分析师评级变化
-- [ ] **IC 逐月衰减诊断**，定位测试集 IC 衰减原因
-- [ ] **Walk-Forward 滚动窗口**，验证策略时间稳定性
+- [ ] **全量重训含基本面**：fetch-fund 全量拉取（5641 只，约 10 小时）完成后跑 phase1+phase2，验证基本面因子能否显著提升 IC
+- [ ] **EPS 定时采集**：每月初运行 `collect_m3_data.py eps`，积累 ≥2 年月度快照后重新加入训练
+- [ ] **资金流向覆盖率**：当前 10.1%（570/5641），关 VPN 后用 `scripts/fetch_fund_flow_local.py` 批量下载到 80%+
+- [ ] **LHB / 研报因子有效性分析**：截面 IC 时序分析，找到真正有效的子期间后重新启用
+- [ ] **watermark 修正**：`data/watermark.json` 中 `kline` 字段需更新为实际数据截止日期
+- [ ] **Walk-Forward 滚动验证**：已有 `--rolling` 参数，需系统性测试时间稳定性
+- [ ] **IC 逐月衰减诊断**：定位测试集 IC 衰减原因，评估是否有 regime 切换效应
 - [ ] **Regime 识别**：趋势 / 震荡 / 危机分状态建模
 - [ ] **基准切换**：当前等权全市场，考虑改沪深 300
 
@@ -233,7 +301,7 @@ INITIAL_CAPITAL = 1_000_000          # 100 万初始资金
 - scikit-learn
 - joblib
 - matplotlib
-- akshare（基本面 + ST 列表）
+- akshare（基本面 + ST 列表 + 北向资金）
 - fpdf2（散户交易手册 PDF）
 - pytest（测试）
 

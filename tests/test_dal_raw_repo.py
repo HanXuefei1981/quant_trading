@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -142,6 +143,27 @@ def test_fundamentals_deduplication(repo):
     repo.upsert_fundamentals(df1)
     repo.upsert_fundamentals(df2)
     assert float(repo.load_fundamentals("000001").iloc[0]["pe_ttm"]) == 20.0
+
+
+def test_load_fundamentals_null_int_column_returns_numpy_float(repo):
+    """BIGINT 列（total_shares/float_shares）含 NULL 时，DuckDB 默认转 pandas
+    nullable Int64（缺失为 pd.NA），其 .values.astype(float64) 会因 float(pd.NA) 崩溃。
+    load_fundamentals 必须归一化为 numpy float64（缺失为 np.nan）。
+    """
+    df = _fundamentals_df()
+    df.loc[0, "total_shares"] = None  # 注入 NULL → 写库后该列含 NULL
+    df.loc[1, "float_shares"] = None
+    repo.upsert_fundamentals(df)
+
+    result = repo.load_fundamentals("000001")
+
+    # 不得是 pandas nullable 扩展类型
+    for col in ("total_shares", "float_shares"):
+        dt = str(result[col].dtype)
+        assert dt not in ("Int64", "Float64", "boolean"), f"{col} 仍是 nullable 扩展类型 {dt}"
+        # 缺失值必须是 np.nan，且整列可无损转 float64（即不含 pd.NA）
+        result[[col]].values.astype(np.float64)  # 不应抛 TypeError
+        assert np.isnan(result[col].to_numpy(dtype=np.float64)).any()
 
 
 # ── fund_flow ─────────────────────────────────────────────────────────────────

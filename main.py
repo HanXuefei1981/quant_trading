@@ -146,98 +146,190 @@ def sync(args):
 
 
 def fetch_fund(args):
-    """批量拉取基本面数据（PE/PB/市值/流通股本）并缓存到 data/fundamentals/
+    """按交易日批量拉取基本面（PE/PB/市值/流通股本）→ DuckDB fundamentals 表。
 
-    先用本地 TDX 数据过滤退市股，再对有效股票调 akshare 拉基本面。
+    每次 API 调用返回全市场当日快照，比逐股方式快约 5000×。
     """
-    from src.data.fundamentals import fetch_all_fundamentals
-    from src.data.tdx_reader import get_active_tdx_codes
+    from src.collectors.fundamental_collector import FundamentalCollector
+    from src.dal.connection import get_db
+    from src.dal.schema import migrate
 
-    if not _SYNC_STATE_FILE.exists():
-        logger.error("未找到数据同步确认记录，请先运行 sync 命令")
-        return
+    conn = get_db()
+    migrate(conn)
 
-    codes = get_active_tdx_codes()
-    if args.sample:
-        codes = codes[:args.sample]
-        logger.info(f"调试模式：仅拉取 {args.sample} 只股票的基本面")
-
-    logger.info(f"开始拉取 {len(codes)} 只股票的基本面数据，延迟 {args.delay}s/只...")
-    stats = fetch_all_fundamentals(codes, delay=args.delay, use_cache=not args.refresh)
-    logger.info(f"完成：新拉取 {stats['ok']}，缓存复用 {stats['cached']}，失败 {stats['fail']}")
+    collector = FundamentalCollector()
+    since = None
+    if args.since:
+        from datetime import datetime
+        since = datetime.strptime(args.since, "%Y-%m-%d").date()
+        logger.info("指定起始日期：%s（从次日开始批量补采，用于回填缺口）", since)
+    else:
+        logger.info("开始按交易日批量拉取基本面（自动从上次水位续采）...")
+    # collect_batch 从 since+1 天起逐日 INSERT OR REPLACE，可幂等补全残缺交易日
+    stats = collector.collect_batch(since=since, delay=args.delay)
+    logger.info("完成：%s", stats)
     logger.info("现在可以运行: python main.py 1  让特征工程加入基本面因子")
 
 
 def fetch_flow(args):
-    """批量拉取个股主力资金流向 + 北向资金并缓存到 data/fund_flow/
+    """按交易日批量拉取资金流向 + 北向资金历史 → DuckDB fund_flow / northbound 表。
 
-    个股资金流向来自东方财富接口（akshare），约 5000 只股票需 40-60 分钟。
-    北向资金为一次性拉取（沪深港通历史净买入）。
+    每次 API 调用返回全市场当日快照，比逐股方式快约 5000×。
     """
-    from src.data.fund_flow import fetch_all_fund_flow, fetch_northbound_flow
+    from src.collectors.fund_flow_collector import FundFlowCollector
+    from src.collectors.northbound_collector import NorthboundCollector
+    from src.dal.connection import get_db
+    from src.dal.schema import migrate
+
+    conn = get_db()
+    migrate(conn)
+
+    # 1. 北向资金历史
+    logger.info("拉取北向资金历史数据...")
+    north_stats = NorthboundCollector().collect()
+    if north_stats.fail > 0:
+        logger.warning("北向资金拉取失败，north_net_* 因子将缺失")
+
+    # 2. 个股主力资金流向（按日批量）
+    collector = FundFlowCollector()
+    logger.info("开始按交易日批量拉取资金流向（自动从上次水位续采）...")
+    stats = collector.collect_batch(delay=args.delay)
+    logger.info("完成：%s", stats)
+    logger.info("现在可以运行: python main.py 1  让特征工程加入资金流向因子")
+
+
+def fetch_basic(args):
+    """拉取全市场股票基础信息（名称/行业/地区）→ DuckDB stock_basic 表。
+
+    供 scan 关联名称与行业用。名称/行业变动少，需要时手动重跑刷新即可。
+    """
+    from src.data.tushare_fetchers import fetch_stock_basic
+    from src.dal.raw_repo import RawRepo
+    from src.dal.connection import get_db
+    from src.dal.schema import migrate
+
+    conn = get_db()
+    migrate(conn)
+
+    logger.info("拉取股票基础信息（tushare stock_basic）...")
+    df = fetch_stock_basic()
+    if df is None or df.empty:
+        logger.error("stock_basic 拉取失败（检查 token / VPN）")
+        return
+    n = RawRepo(conn).upsert_stock_basic(df)
+    logger.info("已写入 stock_basic 表：%d 只股票", n)
+
+
+def fetch_financial(args):
+    """批量拉取财务指标（ROE/ROA/毛利率/净利率/营收/净利润等）→ DuckDB financial_indicator 表"""
+    from src.collectors.financial_collector import FinancialCollector
     from src.data.tdx_reader import get_active_tdx_codes
+    from src.dal.connection import get_db
+    from src.dal.schema import migrate
+    from datetime import date as date_cls
 
     if not _SYNC_STATE_FILE.exists():
         logger.error("未找到数据同步确认记录，请先运行 sync 命令")
         return
 
-    # 1. 北向资金（一次搞定）
-    logger.info("拉取北向资金历史数据...")
-    north_df = fetch_northbound_flow(use_cache=not args.refresh)
-    if north_df is not None:
-        logger.info(
-            f"北向资金数据已就绪：{len(north_df)} 条"
-            f"（{north_df['date'].min().date()} ~ {north_df['date'].max().date()}）"
-        )
-    else:
-        logger.warning("北向资金拉取失败，north_net_* 因子将缺失")
+    conn = get_db()
+    migrate(conn)
 
-    # 2. 个股主力资金流向
     codes = get_active_tdx_codes()
     if args.sample:
         codes = codes[:args.sample]
-        logger.info(f"调试模式：仅拉取 {args.sample} 只股票的资金流向")
+        logger.info(f"调试模式：仅拉取 {args.sample} 只股票的财务指标")
+
+    since = None
+    if args.since:
+        from datetime import datetime
+        since = datetime.strptime(args.since, "%Y-%m-%d").date()
+        logger.info(f"指定起始报告期：{since}")
 
     logger.info(
-        f"开始拉取 {len(codes)} 只股票的资金流向，延迟 {args.delay}s/只"
-        f"（预计 {len(codes) * args.delay / 60:.0f} 分钟）..."
+        f"开始拉取 {len(codes)} 只股票的财务指标，延迟 {args.delay}s/只"
+        f"（预计 {len(codes) * args.delay * 2 / 60:.0f} 分钟，每只调用 2 个接口）..."
     )
-    stats = fetch_all_fund_flow(codes, delay=args.delay, use_cache=not args.refresh)
-    logger.info(f"完成：新拉取 {stats['ok']}，缓存复用 {stats['cached']}，失败 {stats['fail']}")
-    logger.info("现在可以运行: python main.py 1  让特征工程加入资金流向因子")
+    collector = FinancialCollector(delay=args.delay)
+    stats = collector.collect(codes, since=since)
+    logger.info(f"完成：{stats}")
+
+
+def fetch_reports(args):
+    """批量拉取机构研报评级 + EPS 共识 → DuckDB reports / eps_snapshot 表
+
+    --mode report   仅拉取研报评级（tushare pro.report_rc）
+    --mode eps      仅拉取 EPS 共识（akshare stock_profit_forecast_ths）
+    --mode both     两者都拉（默认）
+    """
+    from src.collectors.report_collector import ReportCollector
+    from src.data.tdx_reader import get_active_tdx_codes
+    from src.dal.connection import get_db
+    from src.dal.schema import migrate
+
+    if not _SYNC_STATE_FILE.exists():
+        logger.error("未找到数据同步确认记录，请先运行 sync 命令")
+        return
+
+    conn = get_db()
+    migrate(conn)
+
+    codes = get_active_tdx_codes()
+    if args.sample:
+        codes = codes[:args.sample]
+        logger.info(f"调试模式：仅拉取 {args.sample} 只股票")
+
+    since = None
+    if args.since:
+        from datetime import datetime
+        since = datetime.strptime(args.since, "%Y-%m-%d").date()
+        logger.info(f"指定增量起点：{since}")
+
+    mode = getattr(args, "report_mode", "both")
+
+    if mode in ("report", "both"):
+        logger.info(
+            f"Step 1/{'2' if mode == 'both' else '1'}: 研报评级 → DuckDB reports"
+            f"  {len(codes)} 只，延迟 {args.delay}s/只..."
+        )
+        rc = ReportCollector(mode="report", delay=args.delay)
+        stats = rc.collect(codes, since=since)
+        logger.info(f"研报评级完成：{stats}")
+
+    if mode in ("eps", "both"):
+        logger.info(
+            f"Step {'2' if mode == 'both' else '1'}/{'2' if mode == 'both' else '1'}: EPS 共识 → DuckDB eps_snapshot"
+            f"  {len(codes)} 只，延迟 {args.delay}s/只..."
+        )
+        ec = ReportCollector(mode="eps", delay=args.delay)
+        stats = ec.collect(codes, since=since)
+        logger.info(f"EPS 共识完成：{stats}")
 
 
 def collect(args):
-    """采集今日增量数据到 DuckDB（北向资金 + 龙虎榜快照）。
+    """采集今日增量数据到 DuckDB（龙虎榜快照）。
 
-    注意：K 线数据通过 `ingest` 命令从 zip 文件写入，不在此处处理。
+    注意：K 线通过 `ingest` 写入；北向资金通过 `fetch-flow` 用 tushare 拉取（T+1）。
     日常增量更新：先运行 `ingest --zip <新zip>`，再运行 `collect`，最后运行 `1`。
     """
     from src.dal.connection import get_db
     from src.dal.schema import migrate
-    from src.collectors.northbound_collector import NorthboundCollector
     from src.collectors.signal_collector import SignalCollector
 
     conn = get_db()
     migrate(conn)
 
-    # Step 1: 北向资金今日快照
-    logger.info("Step 1: 更新北向资金快照 → DuckDB northbound")
-    north = NorthboundCollector()
-    north_stats = north.collect()
-    logger.info(f"北向资金更新完成：{north_stats}")
-
-    # Step 2: 龙虎榜今日数据
-    logger.info("Step 2: 更新龙虎榜 → DuckDB lhb")
+    # Step 1: 龙虎榜今日数据
+    logger.info("Step 1: 更新龙虎榜 → DuckDB lhb")
     signal = SignalCollector()
     signal_stats = signal.collect()
     logger.info(f"龙虎榜更新完成：{signal_stats}")
 
-    # Step 3: 腾讯财经 PE/PB 快照（可选）
+    # Step 2: 腾讯财经 PE/PB 快照（可选）
     if getattr(args, "with_tencent", False):
         from src.collectors.tencent_collector import TencentCollector
         from src.data.tdx_reader import get_active_tdx_codes
-        logger.info("Step 3: 采集腾讯财经 PE/PB/市值快照 → DuckDB fundamentals_snapshot")
+        logger.info("Step 2: 采集腾讯财经 PE/PB/市值快照 → DuckDB fundamentals_snapshot")
         codes = get_active_tdx_codes()
         if args.sample:
             codes = codes[:args.sample]
@@ -252,36 +344,28 @@ def collect(args):
 
 
 def update(args):
-    """每日增量更新：mootdx拉取新K线 → 北向快照 → [腾讯快照] → 增量特征 → [可选重训]
+    """日 K 线增量更新：全市场按日批量拉取 + 北向资金（T+1）。
 
-    日常用法（无需依赖本地 TDX .day 文件，直接通过 mootdx TCP 拉取新数据）：
-      python main.py update                   # 标准每日更新（2-3 分钟）
-      python main.py update --with-tencent    # 额外更新腾讯 PE/PB 快照
-      python main.py update --retrain         # 更新后触发 Phase 2 重训
+    职责仅限 K 线与北向，特征工程须在所有接口数据（基本面、主力资金、龙虎榜等）
+    采集完毕后，单独运行 Phase 1 触发。
 
-    月初全量刷新（使用压缩包重建完整历史，之后恢复每日 update）：
+    用法：
+      python main.py update                 # 标准每日更新
+      python main.py update --with-tencent  # 额外更新腾讯 PE/PB 快照
+
+    月初全量刷新：
       python main.py sync --zip hsjday-YYYY-MM-DD.zip  &&  python main.py 1
     """
     from src.data import watermark as wm
     from src.collectors.tdx_collector import TDXCollector
-    from src.collectors.northbound_collector import NorthboundCollector
-    from src.data.tdx_reader import get_active_tdx_codes
-    from src.features.assembler import assemble_incremental
     from datetime import date as date_cls
 
     # 读取当前水位
     kline_since = wm.get_since("kline")
-    from src.dal.connection import get_db
-    from src.dal.meta_repo import MetaRepo as _MetaRepo
-    feat_since = _MetaRepo(get_db()).get_last_date("features", "__market__")
-    logger.info(f"K线水位: {kline_since}  特征水位: {feat_since}")
+    logger.info(f"K线水位: {kline_since}")
 
-    codes = get_active_tdx_codes()
-    if args.sample:
-        codes = codes[:args.sample]
-
-    # Step 1: 通过 mootdx TCP 拉取增量 K 线
-    logger.info("Step 1: mootdx 增量K线拉取")
+    # Step 1: 全市场批量 K 线（按交易日一次取全市场，水位控制起点）
+    logger.info("Step 1: tushare 全市场批量K线（按日，水位: %s）", kline_since)
     tdx = TDXCollector()
     if kline_since is None:
         logger.error(
@@ -289,59 +373,35 @@ def update(args):
             "  python main.py sync --zip <压缩包>  &&  python main.py collect  &&  python main.py 1"
         )
         return
-    kline_stats = tdx.collect_mootdx(codes, since=kline_since)
+    kline_stats = tdx.collect_tushare_daily_batch(since=kline_since)
     logger.info(f"K线更新：{kline_stats}")
 
-    # 更新 kline 水位：只在有新数据时更新，从实际更新的股票中找最新日期
+    # 更新 kline 水位：从 DuckDB 查询最新日期
     if kline_stats.ok > 0:
-        kline_dir = Path(__file__).parent / "data" / "raw" / "kline"
-        for c in codes:
-            try:
-                sample_df = pd.read_parquet(kline_dir / f"{c}.parquet")
-                wm.update("kline", pd.to_datetime(sample_df["date"]).max().date())
-                break
-            except Exception:
-                continue
+        from src.dal.connection import get_db as _get_db
+        _max = _get_db().execute("SELECT MAX(CAST(date AS DATE)) FROM kline").fetchone()[0]
+        if _max:
+            wm.update("kline", _max)
 
-    # Step 2: 北向资金今日快照
-    logger.info("Step 2: 更新北向资金快照")
-    north = NorthboundCollector()
-    north_stats = north.fetch_all([])
+    # Step 2: 北向资金增量更新（tushare moneyflow_hsgt，T+1）
+    logger.info("Step 2: 北向资金增量更新（tushare T+1）")
+    from src.collectors.northbound_collector import NorthboundCollector
+    north_stats = NorthboundCollector().collect()
     logger.info(f"北向资金：{north_stats}")
-    if north_stats.ok > 0:
-        wm.update("northbound", date_cls.today())
 
     # Step 3: 腾讯财经快照（可选）
     if getattr(args, "with_tencent", False):
         from src.collectors.tencent_collector import TencentCollector
+        from src.data.tdx_reader import get_active_tdx_codes
         logger.info("Step 3: 腾讯财经 PE/PB 快照")
+        codes = get_active_tdx_codes()
         tencent = TencentCollector()
         tencent_stats = tencent.fetch_all(codes, incremental=True)
         logger.info(f"腾讯快照：{tencent_stats}")
         if tencent_stats.ok > 0:
             wm.update("tencent", date_cls.today())
 
-    # Step 4: 增量特征组装
-    logger.info("Step 4: 增量特征组装")
-    new_df = assemble_incremental()
-    if new_df.empty:
-        logger.info("无新特征数据，今日可能已更新或无新交易日")
-    else:
-        logger.info(f"增量特征完成，新增 {len(new_df)} 行")
-
-    # Step 5: 可选重训
-    if getattr(args, "retrain", False):
-        logger.info("Step 5: 触发 Phase 2 重训（--retrain 已指定）")
-
-        class _RetrainArgs:
-            walk_forward = False
-            rolling = True
-            train_years = getattr(args, "train_years", 2)
-            final = False
-
-        phase2(_RetrainArgs())
-
-    logger.info("update 完成")
+    logger.info("update 完成（特征工程请在所有数据采集完毕后运行 Phase 1）")
 
 
 def phase1(args):
@@ -522,32 +582,79 @@ def scan(args):
     signal_df["segment"] = signal_df["code"].apply(get_segment)
     signal_df["signal_pct"] = signal_df["signal"].rank(pct=True).round(3)
 
-    top_df = signal_df.head(buffer)[["rank", "code", "segment", "close", "signal", "signal_pct"]]
+    # 关联名称/行业 + 估值（当日 fundamentals）+ 最新财务（ROE/净利同比）
+    from src.features.scan_enrich import enrich_signals
+    from src.dal.connection import get_db
+    top_df = enrich_signals(
+        signal_df.head(buffer), get_db(read_only=True), latest_date.date()
+    )
 
-    print(f"\n{'='*65}")
-    print(f"  信号扫描结果  |  日期：{latest_date.date()}  |  Top-{buffer} 候选池")
-    print(f"{'='*65}")
-    print(f"{'排名':>4}  {'代码':>8}  {'板块':>6}  {'收盘价':>8}  {'信号值':>8}  {'全市场分位':>10}")
-    print(f"{'-'*65}")
-    for _, row in top_df.iterrows():
-        marker = " ◀ 推荐" if row["rank"] <= top_k else ""
-        print(f"{int(row['rank']):>4}  {row['code']:>8}  {row['segment']:>6}  "
-              f"{row['close']:>8.2f}  {row['signal']:>8.4f}  {row['signal_pct']:>10.1%}{marker}")
-    print(f"{'='*65}")
-    print(f"  说明：排名前 {top_k} 只（标◀）为当期建仓候选，{top_k+1}~{buffer} 只为观察缓冲区")
-    print(f"  持仓股仍在前 {buffer} 名内 → 继续持有；跌出前 {buffer} 名 → 纳入卖出候选\n")
+    def _fmt(v, fmt="{:.1f}"):
+        return "—" if pd.isna(v) else fmt.format(v)
 
-    # 保存 CSV
+    def _disp_w(s):
+        # 中文/全角字符按 2 列宽度计
+        return sum(2 if ord(c) > 0x2E7F else 1 for c in str(s))
+
+    def _pad(s, width, left=False):
+        # 按显示宽度补空格，保证中文表头与数值列对齐
+        s = str(s)
+        gap = max(width - _disp_w(s), 0)
+        return s + " " * gap if left else " " * gap + s
+
+    # 列定义：(中文表头, 显示宽度, 取值函数, 是否左对齐)
+    columns = [
+        ("排名", 4, lambda r: int(r["rank"]), False),
+        ("代码", 7, lambda r: r["code"], False),
+        ("名称", 9, lambda r: str(r["name"])[:6] if pd.notna(r["name"]) else "—", True),
+        ("行业", 9, lambda r: str(r["industry"])[:6] if pd.notna(r["industry"]) else "—", True),
+        ("收盘价", 8, lambda r: f"{r['close']:.2f}", False),
+        ("信号值", 8, lambda r: f"{r['signal']:.3f}", False),
+        ("信号分位", 9, lambda r: f"{r['signal_pct']:.1%}", False),
+        ("总市值亿", 9, lambda r: _fmt(r["market_cap_yi"], "{:.0f}"), False),
+        ("市盈率", 8, lambda r: _fmt(r["pe_ttm"]), False),
+        ("市净率", 7, lambda r: _fmt(r["pb"]), False),
+        ("市销率", 7, lambda r: _fmt(r["ps"]), False),
+        ("净资收益率", 11, lambda r: _fmt(r["roe"]), False),
+        ("净利润同比", 11, lambda r: _fmt(r["net_profit_yoy"]), False),
+    ]
+
+    header = " ".join(_pad(c[0], c[1], c[3]) for c in columns)
+    table_w = _disp_w(header) + 2
+    print(f"\n{'=' * table_w}")
+    print(f"  信号扫描结果  |  日期：{latest_date.date()}  |  Top-{buffer} 候选池（前 {top_k} 只为建仓候选）")
+    print(f"{'=' * table_w}")
+    print(header)
+    print('-' * table_w)
+    for _, r in top_df.iterrows():
+        marker = " ◀" if r["rank"] <= top_k else ""
+        print(" ".join(_pad(c[2](r), c[1], c[3]) for c in columns) + marker)
+    print('=' * table_w)
+    if top_df["name"].isna().all():
+        print("  ⚠ 名称/行业全为空：请先运行 python main.py fetch-basic 采集 stock_basic")
+    print(f"  说明：前 {top_k} 只（标◀）为当期建仓候选，{top_k+1}~{buffer} 只为观察缓冲区；"
+          f"持仓跌出前 {buffer} 名 → 纳入卖出候选")
+    print(f"  字段：总市值单位亿元  市盈率为 TTM（亏损股为 —）  净资收益率/净利润同比取最新财报期\n")
+
+    # 保存富信息 CSV（列名中文）
     out_path = PROCESSED_DIR.parent / "backtest" / f"scan_{latest_date.date()}.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    signal_df.head(buffer).to_csv(out_path, index=False, encoding="utf-8-sig")
-    logger.info(f"完整候选列表已保存至 {out_path}")
+    csv_rename = {
+        "rank": "排名", "code": "代码", "name": "名称", "industry": "行业", "segment": "板块",
+        "close": "收盘价", "signal": "信号值", "signal_pct": "信号分位",
+        "market_cap_yi": "总市值亿", "pe_ttm": "市盈率", "pb": "市净率", "ps": "市销率",
+        "roe": "净资收益率", "net_profit_yoy": "净利润同比",
+    }
+    save_cols = list(csv_rename.keys())
+    save_df = top_df[[c for c in save_cols if c in top_df.columns]].rename(columns=csv_rename)
+    save_df.to_csv(out_path, index=False, encoding="utf-8-sig")
+    logger.info(f"完整候选列表（含基本面）已保存至 {out_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="A 股量化交易系统")
-    parser.add_argument("phase", choices=["ingest", "sync", "collect", "fetch-fund", "fetch-flow", "update", "1", "2", "3", "scan"],
-                        help="运行阶段：sync=同步TDX数据 | collect=采集原始数据 | fetch-fund=拉取基本面 | fetch-flow=拉取资金流向 | update=每日增量更新 | 1=特征工程 | 2=训练 | 3=回测 | scan=选股扫描")
+    parser.add_argument("phase", choices=["ingest", "sync", "collect", "fetch-fund", "fetch-flow", "fetch-financial", "fetch-reports", "fetch-basic", "update", "1", "2", "3", "scan"],
+                        help="运行阶段：sync=同步TDX数据 | collect=采集原始数据 | fetch-fund=拉取基本面 | fetch-flow=拉取资金流向 | fetch-financial=拉取财务指标 | fetch-reports=拉取研报/EPS | fetch-basic=拉取股票名称/行业 | update=每日增量更新 | 1=特征工程 | 2=训练 | 3=回测 | scan=选股扫描")
     parser.add_argument("--zip", default=None,
                         help="sync 命令专用：通达信压缩包完整路径（如 /path/to/hsjday-2026-05-12.zip）")
     parser.add_argument("--refresh", action="store_true",
@@ -576,6 +683,11 @@ def main():
     parser.add_argument("--replace-only", action="store_true", dest="replace_only", help="Phase3/scan: 散户模式，只换出跌出候选池的股票，不做存量再平衡")
     parser.add_argument("--retrain", action="store_true", dest="retrain",
                         help="update: 增量更新完成后触发 Phase 2 滚动窗口重训")
+    parser.add_argument("--since", default=None,
+                        help="fetch-financial / fetch-reports: 增量起点（YYYY-MM-DD），不填则按各股增量水位自动判断")
+    parser.add_argument("--mode", default="both", dest="report_mode",
+                        choices=["report", "eps", "both"],
+                        help="fetch-reports: report=仅研报评级 | eps=仅EPS共识 | both=两者都拉（默认）")
     args = parser.parse_args()
 
     if args.phase == "ingest" and not args.zip:
@@ -590,6 +702,9 @@ def main():
         "collect": collect,
         "fetch-fund": fetch_fund,
         "fetch-flow": fetch_flow,
+        "fetch-financial": fetch_financial,
+        "fetch-reports": fetch_reports,
+        "fetch-basic": fetch_basic,
         "update": update,
         "1": phase1,
         "2": phase2,

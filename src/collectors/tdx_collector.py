@@ -140,3 +140,78 @@ class TDXCollector(BaseCollector):
 
         logger.info(f"mootdx 增量完成：{stats}")
         return stats
+
+    def collect_tushare_daily(
+        self,
+        codes: list[str],
+        since: date,
+        delay: float = 0.1,
+    ) -> CollectStats:
+        """通过 tushare pro.daily 拉取增量 K 线，写入 DAL kline 表。
+
+        替代 collect_mootdx，无需本地 TCP 连接，支持全市场批量拉取。
+        """
+        import time
+        from src.data.tushare_fetchers import fetch_kline_daily
+
+        since_ts = pd.Timestamp(since)
+        stats = CollectStats()
+
+        for i, code in enumerate(tqdm(codes, desc="tushare增量K线")):
+            try:
+                df = fetch_kline_daily(code, since=since)
+            except Exception as exc:
+                logger.debug("tushare kline 拉取失败 %s: %s", code, exc)
+                stats.fail += 1
+                continue
+
+            if df is None or df.empty:
+                stats.skipped += 1
+                continue
+
+            new_rows = df[df["date"] > since_ts]
+            if new_rows.empty:
+                stats.skipped += 1
+                continue
+
+            self._raw_repo.upsert_kline(new_rows)
+            self._meta_repo.set_last_date(
+                "kline", code, new_rows["date"].max().date(), len(new_rows)
+            )
+            stats.ok += 1
+
+            if (i + 1) % 500 == 0:
+                logger.info("tushare K线进度 %d/%d  %s", i + 1, len(codes), stats)
+
+            if delay > 0:
+                time.sleep(delay)
+
+        logger.info("tushare K线增量完成：%s", stats)
+        return stats
+
+    def collect_tushare_daily_batch(self, since: date) -> CollectStats:
+        """按交易日批量拉取全市场 K 线（一次 API 调用 ≈ 全市场一天）。
+
+        水位控制：从 since+1 日迭代到今天，非交易日 tushare 返回空表自动跳过。
+        比逐股方式快约 5000×：5644 只 → 每个交易日 1 次调用。
+        """
+        from datetime import timedelta, date as date_cls
+        from src.data.tushare_fetchers import fetch_kline_by_date
+
+        stats = CollectStats()
+        today = date_cls.today()
+        d = since + timedelta(days=1)
+
+        while d <= today:
+            df = fetch_kline_by_date(d)
+            if df is not None and not df.empty:
+                self._raw_repo.upsert_kline(df)
+                stats.ok += 1
+                logger.info("K线批量 %s: %d 只", d.isoformat(), len(df))
+            else:
+                stats.skipped += 1
+                logger.debug("K线 %s: 非交易日，跳过", d.isoformat())
+            d += timedelta(days=1)
+
+        logger.info("K线批量增量完成：交易日=%d 跳过=%d 失败=%d", stats.ok, stats.skipped, stats.fail)
+        return stats

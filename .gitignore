@@ -1,3 +1,8 @@
+# 环境变量与密钥（绝不入库）
+.env
+.env.*
+*.env
+
 # 数据文件（体积过大，不入库）
 data/processed/
 data/raw/
@@ -40,3 +45,10 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 notebooks/.ipynb_checkpoints/
+
+# 本地数据库与采集状态（不入库）
+data/*.db
+data/*.duckdb
+data/watermark.json
+data/fund_flow/
+.superpowers/

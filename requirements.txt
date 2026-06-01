@@ -9,6 +9,8 @@ joblib>=1.4.0
 requests>=2.31.0
 urllib3>=2.0.0
 akshare>=1.14.0  # 备用行情数据源（主数据源为通达信本地文件）
+tushare>=1.4.24  # Tushare Pro 数据接口（使用私有代理服务器）
+python-dotenv>=1.0.0  # 从 .env 文件加载环境变量
 
 # 工具
 tqdm>=4.67.0

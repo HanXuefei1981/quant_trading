@@ -24,7 +24,7 @@ from src.dal.raw_repo import RawRepo
 from src.dal.feature_repo import FeatureRepo
 from src.features.indicators import add_all_features, get_feature_columns
 from src.features.label import add_cross_sectional_label
-from src.features.preprocessing import preprocess_features
+from src.features.preprocessing import get_segment, preprocess_features
 from src.features.report import add_report_features
 from src.features.signal import add_signal_features
 
@@ -115,6 +115,25 @@ def _merge_northbound(kline: pd.DataFrame, north_df: pd.DataFrame) -> pd.DataFra
     north_slim = north_df[["date", "north_net_inflow"]].copy()
     north_slim["date"] = pd.to_datetime(north_slim["date"])
     return kline.merge(north_slim, on="date", how="left")
+
+
+def _preprocess_and_write(combined, feature_cols, feature_repo) -> int:
+    """逐日流式预处理并写表，避免一次性物化整张特征矩阵。
+
+    MAD 去极值 / 板块中性化 / Z-score 全是**按日截面**算子，因此
+    ``preprocess_features(整表)`` 与逐日切片分别处理后再合并逐字节等价。
+    本函数据此把整表拆成单日切片（~MB 级）依次预处理并 upsert，峰值内存
+    从「combined + result 副本(5.3GB) + feat 副本(3.1GB)」降为「combined + 单日切片」，
+    消除约 8GB 重复分配，避免 8GB 机器上的 swap thrash。
+
+    Returns:
+        实际写入的行数。
+    """
+    total = 0
+    for _, day_slice in combined.groupby("date", sort=True):
+        processed = preprocess_features(day_slice, feature_cols)
+        total += feature_repo.upsert_features(processed)
+    return total
 
 
 def assemble(
@@ -212,18 +231,26 @@ def assemble(
 
     logger.info("合并数据集 + 截面标签 + 因子预处理...")
     combined = pd.concat(all_dfs, ignore_index=True)
-    combined = combined.dropna(subset=["future_ret", "ret1"])
-    combined = combined[np.isfinite(combined["future_ret"]) & np.isfinite(combined["ret1"])]
-    combined = add_cross_sectional_label(combined)
-    combined = combined.dropna(subset=["label"])
+    all_dfs.clear()  # 释放每股 DataFrame 列表（~5.3GB），降低 concat 后的并存峰值
+    # 仅按 ret1（过去收益）剔除无效行；future_ret 为 NaN 的最近 5 个交易日要**保留**——
+    # 它们特征有效、仅缺 5 日后标签，写入表供 scan 推断读取（推断截面=最新 K 线日，
+    # 不再滞后 5 日）；训练/回测侧按 label 非空过滤。future_ret 为 inf 的坏值仍剔除。
+    combined = combined[np.isfinite(combined["ret1"])]
+    combined = combined[~np.isinf(combined["future_ret"])]
+    combined = add_cross_sectional_label(combined)  # 无 future_ret 的行 label=NaN，保留
     combined = combined.sort_values(["date", "code"]).reset_index(drop=True)
 
     feature_cols = get_feature_columns(combined)
-    logger.info(f"因子预处理：{len(feature_cols)} 个因子，MAD去极值 → 板块中性化 → Z-score")
-    combined = preprocess_features(combined, feature_cols)
+    logger.info(f"因子预处理：{len(feature_cols)} 个因子，MAD去极值 → 板块中性化 → Z-score（逐日流式写表）")
+    # 逐日流式预处理 + 写表：避免一次性物化整张 ~3.3GB 特征矩阵与 5.3GB result 副本，
+    # 把 8GB 机器上 ~13.7GB 的虚拟内存峰值压到 combined 本身，消除 swap thrash。
+    total = _preprocess_and_write(combined, feature_cols, feature_repo)
+    logger.info(f"全市场特征已写入 FeatureRepo，共 {total} 行")
 
-    feature_repo.upsert_features(combined)
-    logger.info(f"全市场特征已写入 FeatureRepo，共 {len(combined)} 行")
+    # 返回值仅用于上层日志的形状/日期/股票数统计（trainer/scan 均从表读取，不依赖此处特征值）。
+    # 补 segment 列以保持与历史返回结构一致（向量化映射，仅 ~数千唯一 code，开销极小）。
+    seg_map = {c: get_segment(c) for c in combined["code"].unique()}
+    combined["segment"] = combined["code"].map(seg_map)
     return combined
 
 
@@ -326,14 +353,14 @@ def assemble_incremental(
         return pd.DataFrame()
 
     combined = pd.concat(new_dfs, ignore_index=True)
-    combined = combined.dropna(subset=["future_ret", "ret1"])
-    combined = combined[np.isfinite(combined["future_ret"]) & np.isfinite(combined["ret1"])]
+    # 保留 future_ret 为 NaN 的最近交易日行（见 assemble() 同段说明）；仅剔 ret1 无效与 inf。
+    combined = combined[np.isfinite(combined["ret1"])]
+    combined = combined[~np.isinf(combined["future_ret"])]
     if combined.empty:
-        logger.info("新数据全部因 future_ret 为 NaN 被过滤（最后几个交易日无标签，属正常）")
+        logger.info("无有效新数据")
         return pd.DataFrame()
 
-    combined = add_cross_sectional_label(combined)
-    combined = combined.dropna(subset=["label"])
+    combined = add_cross_sectional_label(combined)  # 无 future_ret 的行 label=NaN，保留
     combined = combined.sort_values(["date", "code"]).reset_index(drop=True)
 
     feature_cols = get_feature_columns(combined)
@@ -341,20 +368,32 @@ def assemble_incremental(
 
     feature_repo.upsert_features(combined)
 
-    new_max_date = combined["date"].max().date()
+    # 水位设为最后**有标签**日：下次增量从此向前重算，给之前无标签的最近行补上标签，
+    # 并延伸新的无标签尾部，保证标签最终都被填充。
+    labeled = combined[combined["label"].notna()]
+    watermark_src = labeled if not labeled.empty else combined
+    new_max_date = watermark_src["date"].max().date()
     meta_repo.set_last_date("features", "__market__", new_max_date, row_count=len(combined))
     logger.info(
-        f"增量完成：新增 {len(combined)} 行，已写入 FeatureRepo，"
-        f"水位更新至 {new_max_date}"
+        f"增量完成：新增 {len(combined)} 行（含无标签最近行），已写入 FeatureRepo，"
+        f"水位（最后有标签日）更新至 {new_max_date}"
     )
     return combined
 
 
 def assemble_inference(feature_repo: FeatureRepo | None = None) -> pd.DataFrame:
-    """推断模式：从 FeatureRepo 加载最新截面特征（scan 专用，无需标签）。"""
+    """推断模式：从 features 表读**最新交易日**截面（scan 专用，无需标签）。
+
+    结构与训练统一：Phase 1（assemble）已把最近无标签的交易日（label=NaN）也写入表并
+    完成预处理，故表的最新日 = 最新 K 线日，不再滞后 5 日。表中特征已是预处理后的值，
+    **直接返回、不二次预处理**——与训练读法一致（训练 prepare_xy 也不预处理），
+    避免 train/inference 预处理不一致的偏差。
+    """
     if feature_repo is None:
         from src.dal.connection import get_db
-        feature_repo = FeatureRepo(get_db())
+        # 只读连接：scan 仅读表，可与开着的 monitor 并行
+        feature_repo = FeatureRepo(get_db(read_only=True))
+
     date_range = feature_repo.get_feature_date_range()
     if date_range is None:
         raise FileNotFoundError("features 表为空，请先运行 Phase 1")
@@ -363,5 +402,4 @@ def assemble_inference(feature_repo: FeatureRepo | None = None) -> pd.DataFrame:
     if combined.empty:
         raise RuntimeError(f"特征截面 {latest_date} 无数据")
     logger.info(f"推断截面日期: {latest_date}，共 {len(combined)} 只股票")
-    feature_cols = get_feature_columns(combined)
-    return preprocess_features(combined, feature_cols)
+    return combined

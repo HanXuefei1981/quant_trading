@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.backtest.engine import _buy_cost, _sell_cost, _is_stock, build_benchmark
-from config.settings import COMMISSION_RATE, STAMP_DUTY, SLIPPAGE
+from config.settings import COMMISSION_RATE, STAMP_DUTY, SLIPPAGE, EXCLUDE_KCYB
 
 
 # ── 成本函数 ──────────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ def test_zero_amount_zero_cost():
 
 @pytest.mark.parametrize("code,expected", [
     ("600519", True),   # 沪市主板（茅台）
-    ("688981", True),   # 科创板
+    ("688981", not EXCLUDE_KCYB),  # 科创板：随 EXCLUDE_KCYB 配置（需开通权限，默认排除）
     ("000001", True),   # 深市主板
     ("002594", True),   # 深市中小板
     ("300750", True),   # 创业板
@@ -80,7 +80,8 @@ def test_build_benchmark_length():
     start = df["date"].min().strftime("%Y-%m-%d")
     end   = df["date"].max().strftime("%Y-%m-%d")
     bench = build_benchmark(df, start, end)
-    assert len(bench) == 20
+    # 基准用真实日收益 pct_change()，首日无前值 → N 个交易日产出 N-1 个净值点
+    assert len(bench) == 19
 
 
 def test_build_benchmark_starts_near_initial():

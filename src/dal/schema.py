@@ -109,6 +109,29 @@ CREATE TABLE IF NOT EXISTS collect_log (
 )
 """
 
+_CREATE_FINANCIAL_INDICATOR = """
+CREATE TABLE IF NOT EXISTS financial_indicator (
+    code              VARCHAR NOT NULL,
+    end_date          DATE    NOT NULL,
+    ann_date          DATE,
+    eps               DOUBLE,
+    diluted_eps       DOUBLE,
+    revenue           DOUBLE,
+    revenue_yoy       DOUBLE,
+    net_profit        DOUBLE,
+    net_profit_yoy    DOUBLE,
+    roe               DOUBLE,
+    roa               DOUBLE,
+    gross_margin      DOUBLE,
+    net_margin        DOUBLE,
+    debt_ratio        DOUBLE,
+    bps               DOUBLE,
+    oc_ps             DOUBLE,
+    free_cash_flow    DOUBLE,
+    PRIMARY KEY (code, end_date)
+)
+"""
+
 _CREATE_FUNDAMENTALS_SNAPSHOT = """
 CREATE TABLE IF NOT EXISTS fundamentals_snapshot (
     date             DATE    NOT NULL,
@@ -124,6 +147,17 @@ CREATE TABLE IF NOT EXISTS fundamentals_snapshot (
 )
 """
 
+_CREATE_STOCK_BASIC = """
+CREATE TABLE IF NOT EXISTS stock_basic (
+    code       VARCHAR NOT NULL PRIMARY KEY,
+    name       VARCHAR,
+    industry   VARCHAR,
+    area       VARCHAR,
+    market     VARCHAR,
+    list_date  VARCHAR
+)
+"""
+
 _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_kline_code ON kline (code)",
     "CREATE INDEX IF NOT EXISTS idx_fundamentals_code ON fundamentals (code)",
@@ -134,6 +168,7 @@ _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_features_date ON features (date)",
     "CREATE INDEX IF NOT EXISTS idx_features_code ON features (code)",
     "CREATE INDEX IF NOT EXISTS idx_fundamentals_snapshot_code ON fundamentals_snapshot (code)",
+    "CREATE INDEX IF NOT EXISTS idx_financial_indicator_code ON financial_indicator (code)",
 ]
 
 
@@ -145,7 +180,8 @@ def migrate(conn: duckdb.DuckDBPyConnection | None = None) -> None:
         _CREATE_KLINE, _CREATE_FUNDAMENTALS, _CREATE_FUND_FLOW,
         _CREATE_NORTHBOUND, _CREATE_LHB, _CREATE_REPORTS,
         _CREATE_EPS_SNAPSHOT, _CREATE_FEATURES, _CREATE_COLLECT_LOG,
-        _CREATE_FUNDAMENTALS_SNAPSHOT,
+        _CREATE_FUNDAMENTALS_SNAPSHOT, _CREATE_FINANCIAL_INDICATOR,
+        _CREATE_STOCK_BASIC,
     ]:
         db.execute(sql)
     for idx_sql in _INDEXES:

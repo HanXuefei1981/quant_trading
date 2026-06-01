@@ -193,3 +193,22 @@ def test_preprocess_without_neutralization():
     result = preprocess_features(df, fc, use_neutralization=False)
     assert result.shape[0] == df.shape[0]
     assert not result[fc].isin([np.inf, -np.inf]).any().any()
+
+
+def test_preprocess_handles_nullable_extension_dtype():
+    """特征列为 pandas nullable 扩展类型（Int64/Float64，缺失为 pd.NA）时，
+    preprocess_features 不得在 .astype(np.float64) 处因 float(pd.NA) 崩溃。
+    这是 DuckDB 读取含 NULL 的 BIGINT 列时的真实场景，防止整条流水线末端报错。
+    """
+    df = make_market_df(n_stocks=30, n_days=4)
+    fc = feat_cols_of(df)
+    # 将一个特征列转成 nullable Int64 并注入 pd.NA
+    df["f0"] = pd.array(
+        [pd.NA if i % 7 == 0 else int(round(v)) for i, v in enumerate(df["f0"])],
+        dtype="Int64",
+    )
+
+    result = preprocess_features(df, fc)  # 不应抛 TypeError
+
+    assert result.shape[0] == df.shape[0]
+    assert not result[fc].isin([np.inf, -np.inf]).any().any()

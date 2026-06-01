@@ -23,8 +23,6 @@
   "atr_ratio",
   "vol_ratio",
   "vol_trend",
-  "turnover_ratio",
-  "turnover_trend",
   "ret1",
   "ret3",
   "ret5",
@@ -61,5 +59,7 @@
   "major_net_self_pct",
   "lhb_net_buy_30d",
   "north_net_5d",
-  "north_net_trend"
+  "north_net_trend",
+  "turnover_ratio",
+  "turnover_trend"
 ]

@@ -6,7 +6,7 @@
 <title>量化交易监控台</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#020617;color:#e2e8f0;font-family:'SF Mono','Fira Code',monospace;font-size:13px;padding-bottom:210px}
+body{background:#020617;color:#e2e8f0;font-family:'SF Mono','Fira Code',monospace;font-size:13px;padding-bottom:40px}
 a{color:inherit}
 
 /* Topbar */
@@ -107,21 +107,31 @@ tr:hover td{background:#1e293b40}
 .tag-buf{background:#1e293b;color:#94a3b8}
 
 /* Log panel */
-.log-panel{position:fixed;bottom:0;left:0;right:0;height:200px;background:#020617;border-top:1px solid #1e293b;z-index:200;display:flex;flex-direction:column}
-.log-header{padding:6px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #1e293b;flex-shrink:0}
+.log-panel{position:fixed;bottom:0;left:0;right:0;height:200px;background:#020617;border-top:1px solid #1e293b;z-index:200;display:flex;flex-direction:column;transition:height .2s ease}
+.log-panel.collapsed{height:34px}
+.log-header{padding:6px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #1e293b;flex-shrink:0;cursor:pointer;user-select:none}
+.log-header:hover{background:#0f172a}
 .log-header-title{font-size:11px;color:#64748b;font-weight:600}
 .log-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;display:none}
 .log-dot.active{display:inline-block;animation:pulse 1s infinite}
+.log-toggle{margin-left:auto;font-size:11px;color:#334155;padding:0 4px}
 .log-body{flex:1;overflow-y:auto;padding:6px 16px}
+.log-panel.collapsed .log-body{display:none}
 .log-line{font-size:11px;line-height:1.7;color:#64748b}
 .log-line .ts{color:#334155;margin-right:8px}
 .log-line.info{color:#94a3b8}
 .log-line.warn{color:#f59e0b}
 .log-line.err{color:#ef4444}
 .log-line.out{color:#94a3b8}
+
+/* VPN 提醒 */
+.vpn-banner{background:#422006;border-bottom:1px solid #92400e;padding:7px 20px;font-size:11px;color:#fbbf24;text-align:center;letter-spacing:.2px}
 </style>
 </head>
 <body>
+
+<!-- VPN 提醒 -->
+<div class="vpn-banner">⚠&nbsp; 所有数据采集命令须<strong>关闭 VPN</strong> — tushare 通过国内私有代理访问，VPN 开启将导致连接失败</div>
 
 <!-- 1. Topbar -->
 <div class="topbar">
@@ -152,14 +162,16 @@ tr:hover td{background:#1e293b40}
     <table>
       <thead><tr><th>接口</th><th>因子</th><th>命令</th><th>覆盖率</th><th>状态</th><th>备注</th></tr></thead>
       <tbody>
-        <tr><td>TDX .day 文件</td><td>OHLCV/复权</td><td><code>ingest/update</code></td><td>100%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
-        <tr><td>akshare 财务数据</td><td>PE/PB/市值</td><td><code>collect</code></td><td>~91.8%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
-        <tr><td>akshare 北向资金</td><td>north_net</td><td><code>collect</code></td><td>66.7%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
-        <tr><td>东方财富 资金流向</td><td>major_net</td><td><code>fetch-flow</code></td><td>~10.1%</td><td><span class="warn-icon">△</span></td><td>需关VPN</td></tr>
-        <tr><td>东方财富 龙虎榜</td><td>lhb_net_buy</td><td><code>collect</code></td><td>~45%</td><td><span class="warn-icon">△</span></td><td>历史回填中</td></tr>
-        <tr><td>腾讯基本面</td><td>EPS/净利/ROE</td><td><code>fetch-fund</code></td><td>0%</td><td><span class="err-icon">✗</span></td><td>接口待调试</td></tr>
-        <tr><td>研报评级</td><td>report_rating</td><td>—</td><td>0%</td><td><span class="err-icon">✗</span></td><td>数据源待选</td></tr>
-        <tr><td>mootdx TCP增量</td><td>K线增量</td><td><code>update</code></td><td>100%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
+        <tr><td>TDX .day 文件</td><td>OHLCV（初始化）</td><td><code>ingest</code></td><td>100%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
+        <tr><td>tushare pro.daily</td><td>K线增量</td><td><code>update</code></td><td>100%</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
+        <tr><td>tushare pro.daily_basic</td><td>PE/PB/市值（日频）</td><td><code>fetch-fund</code></td><td>全市场</td><td><span class="ok-icon">✓</span></td><td>按日批量</td></tr>
+        <tr><td>tushare moneyflow_hsgt</td><td>北向资金</td><td><code>fetch-flow / update</code></td><td>聚合</td><td><span class="ok-icon">✓</span></td><td>T+1</td></tr>
+        <tr><td>tushare pro.moneyflow</td><td>主力资金流向</td><td><code>fetch-flow</code></td><td>全市场</td><td><span class="ok-icon">✓</span></td><td>按日批量</td></tr>
+        <tr><td>tushare pro.top_list</td><td>龙虎榜</td><td><code>collect / backfill</code></td><td>市场级</td><td><span class="ok-icon">✓</span></td><td>—</td></tr>
+        <tr><td>tushare pro.report_rc</td><td>研报评级</td><td><code>fetch-reports</code></td><td>—</td><td><span class="warn-icon">△</span></td><td>增量</td></tr>
+        <tr><td>tushare fina_indicator + income</td><td>财务指标（季报）</td><td><code>fetch-financial</code></td><td>—</td><td><span class="warn-icon">△</span></td><td>增量</td></tr>
+        <tr><td>akshare stock_profit_forecast_ths</td><td>EPS共识</td><td><code>fetch-reports</code></td><td>—</td><td><span class="warn-icon">△</span></td><td>快照</td></tr>
+        <tr><td>腾讯财经 qt.gtimg.cn</td><td>PE/PB快照</td><td><code>update --with-tencent</code></td><td>—</td><td><span class="warn-icon">△</span></td><td>可选</td></tr>
       </tbody>
     </table>
   </div>
@@ -172,15 +184,17 @@ tr:hover td{background:#1e293b40}
     <table>
       <thead><tr><th>因子名</th><th>分类</th><th>接口</th><th>覆盖率</th><th>说明</th><th>状态</th></tr></thead>
       <tbody>
-        <tr><td>north_net_5d</td><td>北向资金</td><td>akshare</td><td><div class="cov-wrap"><span>66.7%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:66.7%"></div></div></div></td><td>5日北向净买入</td><td><span class="ok-icon">✓</span></td></tr>
-        <tr><td>north_net_trend</td><td>北向资金</td><td>akshare</td><td><div class="cov-wrap"><span>66.7%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:66.7%"></div></div></div></td><td>20日线性回归</td><td><span class="ok-icon">✓</span></td></tr>
-        <tr><td>lhb_net_buy</td><td>龙虎榜</td><td>东方财富</td><td><div class="cov-wrap"><span>45%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:45%"></div></div></div></td><td>机构/游资净买入</td><td><span class="warn-icon">△</span></td></tr>
-        <tr><td>major_net_buy_1d</td><td>主力资金</td><td>东方财富</td><td><div class="cov-wrap"><span>10.1%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:10.1%"></div></div></div></td><td>当日主力净流入</td><td><span class="err-icon">✗</span></td></tr>
-        <tr><td>major_net_buy_5d</td><td>主力资金</td><td>东方财富</td><td><div class="cov-wrap"><span>10.1%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:10.1%"></div></div></div></td><td>5日主力净流入</td><td><span class="err-icon">✗</span></td></tr>
-        <tr><td>pe_ttm</td><td>基本面</td><td>akshare</td><td><div class="cov-wrap"><span>91.8%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:91.8%"></div></div></div></td><td>市盈率TTM</td><td><span class="ok-icon">✓</span></td></tr>
-        <tr><td>pb / market_cap</td><td>基本面</td><td>akshare</td><td><div class="cov-wrap"><span>91.8%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:91.8%"></div></div></div></td><td>市净率/流通市值</td><td><span class="ok-icon">✓</span></td></tr>
-        <tr><td>eps_yoy</td><td>研报/EPS</td><td>腾讯(待建)</td><td><div class="cov-wrap"><span>0%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:0%"></div></div></div></td><td>EPS同比增长</td><td><span class="err-icon">✗</span></td></tr>
-        <tr><td>report_rating</td><td>研报/EPS</td><td>待选型</td><td><div class="cov-wrap"><span>0%</span><div class="cov-bar-bg"><div class="cov-bar" style="width:0%"></div></div></div></td><td>分析师评级</td><td><span class="err-icon">✗</span></td></tr>
+        <tr><td>north_net_5d</td><td>北向资金</td><td>tushare</td><td>—</td><td>5日北向净买入（T+1）</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>north_net_trend</td><td>北向资金</td><td>tushare</td><td>—</td><td>20日线性回归（T+1）</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>lhb_net_buy</td><td>龙虎榜</td><td>tushare</td><td>—</td><td>机构/游资净买入</td><td><span class="warn-icon">△</span></td></tr>
+        <tr><td>major_net_inflow</td><td>主力资金</td><td>tushare</td><td>—</td><td>大单+超大单净流入</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>major_net_pct</td><td>主力资金</td><td>tushare</td><td>—</td><td>主力净额占成交比</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>pe_ttm / pb</td><td>基本面</td><td>tushare</td><td>—</td><td>市盈率TTM/市净率</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>market_cap</td><td>基本面</td><td>tushare</td><td>—</td><td>总市值/流通市值</td><td><span class="ok-icon">✓</span></td></tr>
+        <tr><td>roe / roa / gross_margin</td><td>财务指标</td><td>tushare</td><td>—</td><td>季报/年报</td><td><span class="warn-icon">△</span></td></tr>
+        <tr><td>revenue / net_profit</td><td>财务指标</td><td>tushare</td><td>—</td><td>营收/归母净利润（万元）</td><td><span class="warn-icon">△</span></td></tr>
+        <tr><td>report_rating</td><td>研报/EPS</td><td>tushare</td><td>—</td><td>机构评级</td><td><span class="warn-icon">△</span></td></tr>
+        <tr><td>eps_cur / eps_next</td><td>EPS共识</td><td>akshare</td><td>—</td><td>当年/次年预测EPS</td><td><span class="warn-icon">△</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -194,13 +208,14 @@ tr:hover td{background:#1e293b40}
     <div class="section-title">流程控制台</div>
 
     <div class="ctrl-group">
-      <div class="ctrl-group-label">数据采集</div>
+      <div class="ctrl-group-label">数据采集 <span style="color:#92400e;font-size:9px">▶ 执行前确认已关闭 VPN</span></div>
       <div class="btn-grid">
-        <button id="btn-update" class="btn primary" onclick="runCmd('update')">日常增量一键</button>
-        <button id="btn-ingest" class="btn" onclick="runCmd('ingest')">全量导入</button>
-        <button id="btn-collect" class="btn" onclick="runCmd('collect')">基本面/北向</button>
-        <button id="btn-fetch-fund" class="btn warn-btn" onclick="runCmd('fetch-fund')">腾讯基本面 ⚠VPN</button>
-        <button id="btn-fetch-flow" class="btn warn-btn" onclick="runCmd('fetch-flow')">资金流向 ⚠VPN</button>
+        <button id="btn-update" class="btn" onclick="runCmd('update')">日 Kline / 北向</button>
+        <button id="btn-fetch-fund" class="btn" onclick="runCmd('fetch-fund')">基本面（批量）</button>
+        <button id="btn-fetch-flow" class="btn" onclick="runCmd('fetch-flow')">主力资金流向（批量）</button>
+        <button id="btn-collect" class="btn" onclick="runCmd('collect')">龙虎榜</button>
+        <button id="btn-fetch-financial" class="btn" onclick="runCmd('fetch-financial')">财务指标</button>
+        <button id="btn-fetch-reports" class="btn" onclick="runCmd('fetch-reports')">研报 / EPS</button>
       </div>
     </div>
 
@@ -274,11 +289,13 @@ tr:hover td{background:#1e293b40}
 </div><!-- .main -->
 
 <!-- 7. Log panel -->
-<div class="log-panel">
-  <div class="log-header">
+<div class="log-panel collapsed" id="log-panel">
+  <div class="log-header" onclick="toggleLog()">
     <span class="log-header-title">执行日志</span>
     <div class="log-dot" id="log-dot"></div>
     <span id="log-cmd" style="font-size:11px;color:#475569"></span>
+    <button id="btn-kill" onclick="event.stopPropagation();killTask()" style="display:none;margin-left:10px;background:#450a0a;border:1px solid #ef4444;color:#ef4444;padding:2px 10px;border-radius:4px;font-size:10px;cursor:pointer;font-family:inherit;letter-spacing:.3px">■ 终止进程</button>
+    <span class="log-toggle" id="log-toggle">▲ 展开</span>
   </div>
   <div class="log-body" id="log-body">
     <div class="log-line">等待命令执行...</div>
@@ -297,12 +314,16 @@ const now = () => new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'
 function renderWatermarks(wm) {
   if (!wm) return;
   const defs = [
-    {key:'kline',       label:'K线行情'},
-    {key:'features',    label:'特征工程'},
-    {key:'northbound',  label:'北向资金'},
-    {key:'fundamentals',label:'基本面数据'},
-    {key:'fund_flow',   label:'资金流向'},
-    {key:'models',      label:'模型文件'},
+    {key:'kline',               label:'K线行情'},
+    {key:'features',            label:'特征工程'},
+    {key:'northbound',          label:'北向资金'},
+    {key:'fundamentals',        label:'基本面(日频)'},
+    {key:'fund_flow',           label:'主力资金流向'},
+    {key:'lhb',                 label:'龙虎榜'},
+    {key:'reports',             label:'研报评级'},
+    {key:'financial_indicator', label:'财务指标'},
+    {key:'eps_snapshot',        label:'EPS共识'},
+    {key:'models',              label:'模型文件'},
   ];
   const grid = $('wm-grid');
   grid.innerHTML = defs.map(d => {
@@ -442,16 +463,41 @@ function setStatusDot(st, cmd) {
   const label=$('status-label');
   const logDot=$('log-dot');
   const logCmd=$('log-cmd');
+  const killBtn=$('btn-kill');
   if (st==='running') {
     dot.className='dot running';
     label.textContent=cmd||'运行中';
     logDot.className='log-dot active';
     logCmd.textContent=cmd||'';
+    killBtn.style.display='inline-block';
   } else {
     dot.className='dot';
     label.textContent='空闲';
     logDot.className='log-dot';
     logCmd.textContent='';
+    killBtn.style.display='none';
+  }
+}
+
+// --- Kill task ---
+async function killTask() {
+  const killBtn=$('btn-kill');
+  killBtn.textContent='终止中...';
+  killBtn.disabled=true;
+  try {
+    const res=await fetch('/api/kill',{method:'POST'});
+    if (res.ok) {
+      appendLog({ts:now(),level:'warn',msg:'已发送终止信号，等待进程退出...'});
+    } else {
+      const j=await res.json().catch(()=>({}));
+      appendLog({ts:now(),level:'err',msg:'终止失败: '+(j.detail||`HTTP ${res.status}`)});
+      killBtn.textContent='■ 终止进程';
+      killBtn.disabled=false;
+    }
+  } catch(e) {
+    appendLog({ts:now(),level:'err',msg:'终止请求失败: '+e.message});
+    killBtn.textContent='■ 终止进程';
+    killBtn.disabled=false;
   }
 }
 
@@ -461,6 +507,7 @@ async function runCmd(cmd) {
   const btn=$('btn-'+cmd);
   btn.classList.add('running');
   setStatusDot('running', cmd);
+  expandLog();
   $('log-body').innerHTML='';
   appendLog({ts:now(),level:'info',msg:`启动命令: ${cmd}`});
 
@@ -504,6 +551,23 @@ async function runCmd(cmd) {
     appendLog({ts:now(),level:'err',msg:'SSE 连接中断'});
     setTimeout(()=>{btn.classList.remove('error');}, 4000);
   };
+}
+
+// --- Log panel toggle ---
+function toggleLog() {
+  const panel = $('log-panel');
+  const btn = $('log-toggle');
+  const collapsed = panel.classList.toggle('collapsed');
+  btn.textContent = collapsed ? '▲ 展开' : '▼ 收起';
+  document.body.style.paddingBottom = collapsed ? '40px' : '210px';
+}
+function expandLog() {
+  const panel = $('log-panel');
+  if (panel.classList.contains('collapsed')) {
+    panel.classList.remove('collapsed');
+    $('log-toggle').textContent = '▼ 收起';
+    document.body.style.paddingBottom = '210px';
+  }
 }
 
 // Init

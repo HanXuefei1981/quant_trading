@@ -1,15 +1,20 @@
-"""Tests for monitor/readers/watermark.py — TDD (RED → GREEN)."""
+"""Tests for monitor/readers/watermark.py（DuckDB 版水位读取器）。
+
+读取器直接对各表取 MAX(date) 与 COUNT(DISTINCT code)，不再依赖 collect_log——
+因为批量采集路径（fetch-fund / fetch-flow）会绕过 collect_log。
+"""
 
 import json
 from pathlib import Path
 
+import duckdb
 import pytest
 
+from src.dal.schema import migrate
 from monitor.readers.watermark import (
     UNIVERSE_SIZE,
     SourceStatus,
     WatermarkData,
-    _count_parquet,
     get_watermarks,
 )
 
@@ -23,214 +28,207 @@ def _write_watermark(data_dir: Path, payload: dict) -> None:
     (data_dir / "watermark.json").write_text(json.dumps(payload))
 
 
-def _make_parquet_files(directory: Path, count: int, prefix: str = "stock_") -> None:
-    """Create `count` dummy parquet files (not real parquet, just for counting)."""
-    directory.mkdir(parents=True, exist_ok=True)
-    for i in range(count):
-        (directory / f"{prefix}{i:05d}.parquet").write_bytes(b"")
+def _populate_codes(conn, table: str, n: int, date_str: str) -> None:
+    """向按股票表插入 n 个不同 code，日期列均为 date_str。"""
+    if table == "reports":
+        conn.execute(
+            "INSERT INTO reports (date, code, institution) "
+            f"SELECT DATE '{date_str}', (i)::VARCHAR, '机构A' FROM range({n}) t(i)"
+        )
+    elif table == "financial_indicator":
+        # 日期列读取的是 ann_date（公告日）
+        conn.execute(
+            "INSERT INTO financial_indicator (code, end_date, ann_date) "
+            f"SELECT (i)::VARCHAR, DATE '2026-03-31', DATE '{date_str}' FROM range({n}) t(i)"
+        )
+    elif table == "eps_snapshot":
+        conn.execute(
+            "INSERT INTO eps_snapshot (snapshot_date, code) "
+            f"SELECT DATE '{date_str}', (i)::VARCHAR FROM range({n}) t(i)"
+        )
+    else:  # fundamentals / fund_flow / lhb / features
+        datecol = "date"
+        conn.execute(
+            f"INSERT INTO {table} ({datecol}, code) "
+            f"SELECT DATE '{date_str}', (i)::VARCHAR FROM range({n}) t(i)"
+        )
+
+
+@pytest.fixture
+def make_db(tmp_path, monkeypatch):
+    """构建临时 DuckDB 并通过 QUANT_DB_PATH 指向它；返回 (data_dir, populate_fn)。
+
+    每次写入用独立短连接并立即关闭——DuckDB 不允许同一文件同时存在 read_write 与
+    read_only 连接，读取器以 read_only 打开时必须没有其它连接持有该文件。
+    """
+    db_path = tmp_path / "test.duckdb"
+    conn = duckdb.connect(str(db_path))
+    migrate(conn)
+    conn.close()
+
+    def populate(table: str, n: int, date_str: str) -> None:
+        c = duckdb.connect(str(db_path))
+        _populate_codes(c, table, n, date_str)
+        c.commit()
+        c.close()
+
+    monkeypatch.setenv("QUANT_DB_PATH", str(db_path))
+    yield tmp_path, populate
 
 
 # ---------------------------------------------------------------------------
-# Test 1: get_watermarks returns WatermarkData with all 6 fields
+# 结构 & kline
 # ---------------------------------------------------------------------------
 
 
-def test_returns_watermark_data_with_all_fields(tmp_path: Path) -> None:
-    """get_watermarks returns a WatermarkData with all 6 SourceStatus fields."""
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-15", "northbound": "2026-05-18"})
-    (tmp_path / "fundamentals").mkdir()
-    (tmp_path / "fund_flow").mkdir()
-    (tmp_path / "models").mkdir()
+def test_returns_watermark_data_with_all_fields(make_db):
+    data_dir, _ = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
 
-    result = get_watermarks(tmp_path)
+    result = get_watermarks(data_dir)
 
     assert isinstance(result, WatermarkData)
-    assert isinstance(result.kline, SourceStatus)
-    assert isinstance(result.features, SourceStatus)
-    assert isinstance(result.northbound, SourceStatus)
-    assert isinstance(result.fundamentals, SourceStatus)
-    assert isinstance(result.fund_flow, SourceStatus)
-    assert isinstance(result.models, SourceStatus)
+    for field in ("kline", "features", "northbound", "fundamentals",
+                  "fund_flow", "lhb", "reports", "financial_indicator",
+                  "eps_snapshot", "models"):
+        assert isinstance(getattr(result, field), SourceStatus)
 
 
-# ---------------------------------------------------------------------------
-# Test 2: kline status is "ok" when watermark.json has kline date
-# ---------------------------------------------------------------------------
+def test_kline_status_ok_from_watermark_json(make_db):
+    data_dir, _ = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
 
-
-def test_kline_status_ok_when_date_exists(tmp_path: Path) -> None:
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-15", "northbound": "2026-05-18"})
-    (tmp_path / "fundamentals").mkdir()
-    (tmp_path / "fund_flow").mkdir()
-    (tmp_path / "models").mkdir()
-
-    result = get_watermarks(tmp_path)
+    result = get_watermarks(data_dir)
 
     assert result.kline.status == "ok"
-    assert result.kline.date == "2026-05-15"
+    assert result.kline.date == "2026-05-26"
 
 
 # ---------------------------------------------------------------------------
-# Test 3: features status is "warn" when features date < kline date
+# 核心修复：直接读表 MAX(date)（不依赖 collect_log）
 # ---------------------------------------------------------------------------
 
 
-def test_features_status_warn_when_features_date_behind_kline(tmp_path: Path) -> None:
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-08", "northbound": "2026-05-18"})
-    (tmp_path / "fundamentals").mkdir()
-    (tmp_path / "fund_flow").mkdir()
-    (tmp_path / "models").mkdir()
+def test_reads_table_max_date_without_collect_log(make_db):
+    """批量写入绕过 collect_log，读取器仍应从表本身取到最新日期。"""
+    data_dir, populate = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
+    populate("fund_flow", n=10, date_str="2026-05-26")
 
-    result = get_watermarks(tmp_path)
+    result = get_watermarks(data_dir)
 
-    assert result.features.status == "warn"
-    assert result.features.date == "2026-05-08"
+    assert result.fund_flow.date == "2026-05-26"  # collect_log 为空仍能取到
+
+
+def test_financial_indicator_uses_ann_date(make_db):
+    """财务表的新鲜度取公告日 ann_date，而非报告期 end_date。"""
+    data_dir, populate = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
+    populate("financial_indicator", n=5000, date_str="2026-05-21")  # ann_date
+
+    result = get_watermarks(data_dir)
+
+    assert result.financial_indicator.date == "2026-05-21"
 
 
 # ---------------------------------------------------------------------------
-# Test 4: features status is "ok" when features date == kline date
+# features：5 日标签视界容差（落后 kline ≤10 自然日仍算 ok）
 # ---------------------------------------------------------------------------
 
 
-def test_features_status_ok_when_dates_match(tmp_path: Path) -> None:
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-15", "northbound": "2026-05-18"})
-    (tmp_path / "fundamentals").mkdir()
-    (tmp_path / "fund_flow").mkdir()
-    (tmp_path / "models").mkdir()
+def test_features_ok_when_within_label_horizon(make_db):
+    """features 比 kline 落后 7 天（5 个交易日标签视界）应判 ok，而非告警。"""
+    data_dir, populate = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
+    populate("features", n=10, date_str="2026-05-19")  # 落后 7 自然日
 
-    result = get_watermarks(tmp_path)
+    result = get_watermarks(data_dir)
 
     assert result.features.status == "ok"
+    assert result.features.date == "2026-05-19"
+
+
+def test_features_warn_when_too_stale(make_db):
+    """features 落后 kline 超过 10 自然日，说明特征工程未跟上，判 warn。"""
+    data_dir, populate = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
+    populate("features", n=10, date_str="2026-05-01")  # 落后 25 天
+
+    result = get_watermarks(data_dir)
+
+    assert result.features.status == "warn"
 
 
 # ---------------------------------------------------------------------------
-# Test 5: fundamentals coverage computed correctly from parquet count
+# 覆盖率 & 状态阈值
 # ---------------------------------------------------------------------------
 
 
-def test_fundamentals_coverage_computed_correctly(tmp_path: Path) -> None:
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-15", "northbound": "2026-05-18"})
-    fund_dir = tmp_path / "fundamentals"
-    _make_parquet_files(fund_dir, count=5641)
-    (tmp_path / "fund_flow").mkdir()
-    (tmp_path / "models").mkdir()
+def test_fundamentals_coverage_and_ok_status(make_db):
+    data_dir, populate = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
+    n = int(UNIVERSE_SIZE * 0.90) + 1
+    populate("fundamentals", n=n, date_str="2026-05-26")
 
-    result = get_watermarks(tmp_path)
+    result = get_watermarks(data_dir)
 
-    assert result.fundamentals.count == 5641
-    assert result.fundamentals.coverage == pytest.approx(1.0, rel=1e-3)
-
-
-# ---------------------------------------------------------------------------
-# Test 6: fundamentals status "ok" when coverage >= 0.90
-# ---------------------------------------------------------------------------
-
-
-def test_fundamentals_status_ok_when_coverage_at_least_90_percent(tmp_path: Path) -> None:
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-15", "northbound": "2026-05-18"})
-    fund_dir = tmp_path / "fundamentals"
-    # 90% of 5641 = 5076.9 → use 5077
-    count_90 = int(UNIVERSE_SIZE * 0.90) + 1
-    _make_parquet_files(fund_dir, count=count_90)
-    (tmp_path / "fund_flow").mkdir()
-    (tmp_path / "models").mkdir()
-
-    result = get_watermarks(tmp_path)
-
+    assert result.fundamentals.count == n
+    assert result.fundamentals.coverage == pytest.approx(n / UNIVERSE_SIZE, rel=1e-3)
     assert result.fundamentals.status == "ok"
 
 
-# ---------------------------------------------------------------------------
-# Test 7: fundamentals status "warn" when 0.70 <= coverage < 0.90
-# ---------------------------------------------------------------------------
+def test_fundamentals_warn_between_70_and_90(make_db):
+    data_dir, populate = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
+    populate("fundamentals", n=int(UNIVERSE_SIZE * 0.80), date_str="2026-05-26")
 
-
-def test_fundamentals_status_warn_when_coverage_between_70_and_90(tmp_path: Path) -> None:
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-15", "northbound": "2026-05-18"})
-    fund_dir = tmp_path / "fundamentals"
-    # exactly 80% of 5641
-    count_80 = int(UNIVERSE_SIZE * 0.80)
-    _make_parquet_files(fund_dir, count=count_80)
-    (tmp_path / "fund_flow").mkdir()
-    (tmp_path / "models").mkdir()
-
-    result = get_watermarks(tmp_path)
+    result = get_watermarks(data_dir)
 
     assert result.fundamentals.status == "warn"
 
 
-# ---------------------------------------------------------------------------
-# Test 8: fund_flow status "err" when coverage < 0.20
-# ---------------------------------------------------------------------------
+def test_fund_flow_err_when_coverage_below_20_percent(make_db):
+    data_dir, populate = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
+    populate("fund_flow", n=100, date_str="2026-05-26")  # 100/5641 ≈ 1.8%
 
-
-def test_fund_flow_status_err_when_coverage_below_20_percent(tmp_path: Path) -> None:
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-15", "northbound": "2026-05-18"})
-    (tmp_path / "fundamentals").mkdir()
-    flow_dir = tmp_path / "fund_flow"
-    # fewer than 20% of 5641 = 1128.2 → use 100
-    _make_parquet_files(flow_dir, count=100)
-    (tmp_path / "models").mkdir()
-
-    result = get_watermarks(tmp_path)
+    result = get_watermarks(data_dir)
 
     assert result.fund_flow.status == "err"
 
 
+def test_eps_snapshot_ok_at_realistic_analyst_coverage(make_db):
+    """EPS 共识约覆盖半数市场，~49% 应判 ok（阈值已下调到 40%）。"""
+    data_dir, populate = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
+    populate("eps_snapshot", n=int(UNIVERSE_SIZE * 0.49), date_str="2026-05-27")
+
+    result = get_watermarks(data_dir)
+
+    assert result.eps_snapshot.status == "ok"
+
+
 # ---------------------------------------------------------------------------
-# Test 9: models status "ok" when eval_results.json exists
+# models：依据 eval_results.json 是否存在
 # ---------------------------------------------------------------------------
 
 
-def test_models_status_ok_when_eval_results_exists(tmp_path: Path) -> None:
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-15", "northbound": "2026-05-18"})
-    (tmp_path / "fundamentals").mkdir()
-    (tmp_path / "fund_flow").mkdir()
-    models_dir = tmp_path / "models"
+def test_models_ok_when_eval_results_exists(make_db):
+    data_dir, _ = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26", "features": "2026-05-19"})
+    models_dir = data_dir / "models"
     models_dir.mkdir()
     (models_dir / "eval_results.json").write_text("{}")
 
-    result = get_watermarks(tmp_path)
+    result = get_watermarks(data_dir)
 
     assert result.models.status == "ok"
 
 
-# ---------------------------------------------------------------------------
-# Test 10: models status "err" when eval_results.json is missing
-# ---------------------------------------------------------------------------
+def test_models_err_when_eval_results_missing(make_db):
+    data_dir, _ = make_db
+    _write_watermark(data_dir, {"kline": "2026-05-26"})
 
-
-def test_models_status_err_when_eval_results_missing(tmp_path: Path) -> None:
-    _write_watermark(tmp_path, {"kline": "2026-05-15", "features": "2026-05-15", "northbound": "2026-05-18"})
-    (tmp_path / "fundamentals").mkdir()
-    (tmp_path / "fund_flow").mkdir()
-    (tmp_path / "models").mkdir()  # directory exists but no eval_results.json
-
-    result = get_watermarks(tmp_path)
+    result = get_watermarks(data_dir)
 
     assert result.models.status == "err"
-
-
-# ---------------------------------------------------------------------------
-# Test 11 (bonus): _count_parquet skips files starting with "_"
-# ---------------------------------------------------------------------------
-
-
-def test_count_parquet_skips_underscore_prefixed_files(tmp_path: Path) -> None:
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "stock_001.parquet").write_bytes(b"")
-    (tmp_path / "stock_002.parquet").write_bytes(b"")
-    (tmp_path / "_northbound.parquet").write_bytes(b"")
-    (tmp_path / "_meta.parquet").write_bytes(b"")
-
-    assert _count_parquet(tmp_path) == 2
-
-
-# ---------------------------------------------------------------------------
-# Test 12 (bonus): _count_parquet returns 0 for missing directory
-# ---------------------------------------------------------------------------
-
-
-def test_count_parquet_returns_zero_for_missing_directory(tmp_path: Path) -> None:
-    missing = tmp_path / "does_not_exist"
-    assert _count_parquet(missing) == 0

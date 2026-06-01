@@ -1,14 +1,8 @@
-"""资金流向数据拉取与本地缓存
+"""个股资金流向数据拉取与本地缓存（akshare 东方财富接口）
 
-数据来源：
-  个股主力资金：akshare.stock_individual_fund_flow（东方财富接口）
-  北向资金：    akshare.stock_connect_flow_north_hist（沪深港通北向历史）
+缓存路径：data/fund_flow/{code}.parquet
 
-缓存路径：
-  data/fund_flow/{code}.parquet     个股资金流向
-  data/fund_flow/_northbound.parquet  北向资金（共享）
-
-个股列（标准化后）：
+列（标准化后）：
   date               交易日（datetime64）
   major_net_inflow   主力净流入额（元，正=净买，负=净卖）
   major_net_pct      主力净流入占成交额百分比（%）
@@ -172,51 +166,3 @@ def load_fund_flow(code: str) -> Optional[pd.DataFrame]:
         return None
 
 
-def fetch_northbound_flow(use_cache: bool = True) -> Optional[pd.DataFrame]:
-    """拉取沪深港通北向资金历史净买入数据（一次性拉取，全市场共享）"""
-    FUND_FLOW_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = FUND_FLOW_DIR / "_northbound.parquet"
-
-    if use_cache and cache_path.exists():
-        try:
-            return pd.read_parquet(cache_path)
-        except Exception as exc:
-            logger.warning(f"北向资金缓存读取失败: {exc}，将重新拉取")
-
-    try:
-        import akshare as ak
-        raw = ak.stock_hsgt_hist_em(symbol="北向资金")
-    except Exception as exc:
-        logger.warning(f"北向资金拉取失败: {exc}")
-        return None
-
-    if raw is None or raw.empty:
-        return None
-
-    date_col = _find_col(raw, ["日期", "date"])
-    amount_col = _find_col(raw, _NORTH_AMOUNT_CANDIDATES)
-
-    if date_col is None or amount_col is None:
-        logger.warning(f"北向资金数据列无法识别，可用列：{list(raw.columns)}")
-        return None
-
-    df = raw[[date_col, amount_col]].copy()
-    df = df.rename(columns={date_col: "date", amount_col: "north_net_inflow"})
-    df["date"] = pd.to_datetime(df["date"])
-    df["north_net_inflow"] = pd.to_numeric(df["north_net_inflow"], errors="coerce")
-    df = df.sort_values("date").drop_duplicates(subset="date", keep="last").reset_index(drop=True)
-
-    df.to_parquet(cache_path, index=False)
-    logger.info(f"北向资金数据已保存，共 {len(df)} 条（{df['date'].min().date()} ~ {df['date'].max().date()}）")
-    return df
-
-
-def load_northbound_flow() -> Optional[pd.DataFrame]:
-    """从本地缓存加载北向资金数据（不触发网络请求）"""
-    cache_path = FUND_FLOW_DIR / "_northbound.parquet"
-    if not cache_path.exists():
-        return None
-    try:
-        return pd.read_parquet(cache_path)
-    except Exception:
-        return None

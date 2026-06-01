@@ -24,9 +24,11 @@ def repos():
 
 
 def _fake_fund_flow(n: int = 3) -> pd.DataFrame:
+    """模拟 fetch_moneyflow 的输出列：date, code, major_net_inflow(元), major_net_pct(%)。"""
     dates = pd.date_range("2024-01-02", periods=n, freq="B")
     return pd.DataFrame({
         "date": dates,
+        "code": "000001",
         "major_net_inflow": ([1e7, 2e7, 3e7] * ((n // 3) + 1))[:n],
         "major_net_pct": ([1.0, 2.0, 3.0] * ((n // 3) + 1))[:n],
     })
@@ -37,7 +39,7 @@ def test_collect_first_time_writes_all_rows(repos):
     collector = FundFlowCollector(raw_repo=raw_repo, meta_repo=meta_repo, delay=0)
 
     # patch 模块级函数对象（而非 collector 命名空间），因为 import 在方法体内延迟执行
-    with patch("src.data.fund_flow.fetch_fund_flow", return_value=_fake_fund_flow(3)):
+    with patch("src.data.tushare_fetchers.fetch_moneyflow", return_value=_fake_fund_flow(3)):
         stats = collector.collect(codes=["000001"])
 
     assert stats.ok == 1
@@ -55,7 +57,7 @@ def test_collect_incremental_skips_old_rows(repos):
 
     collector = FundFlowCollector(raw_repo=raw_repo, meta_repo=meta_repo, delay=0)
     # patch 模块级函数对象（而非 collector 命名空间），因为 import 在方法体内延迟执行
-    with patch("src.data.fund_flow.fetch_fund_flow", return_value=_fake_fund_flow(3)):
+    with patch("src.data.tushare_fetchers.fetch_moneyflow", return_value=_fake_fund_flow(3)):
         stats = collector.collect(codes=["000001"])
 
     assert stats.ok == 1
@@ -68,7 +70,7 @@ def test_collect_network_failure_counts_fail(repos):
     collector = FundFlowCollector(raw_repo=raw_repo, meta_repo=meta_repo, delay=0)
 
     # patch 模块级函数对象（而非 collector 命名空间），因为 import 在方法体内延迟执行
-    with patch("src.data.fund_flow.fetch_fund_flow", return_value=None):
+    with patch("src.data.tushare_fetchers.fetch_moneyflow", return_value=None):
         stats = collector.collect(codes=["000001"])
 
     assert stats.fail == 1

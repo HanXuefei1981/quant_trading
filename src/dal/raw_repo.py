@@ -5,6 +5,22 @@ from datetime import date
 
 import duckdb
 import pandas as pd
+from pandas.api.types import is_extension_array_dtype
+
+
+def _coerce_nullable_to_float(df: pd.DataFrame) -> pd.DataFrame:
+    """将 pandas nullable 数值扩展类型（Int64/Float64/boolean）归一化为 numpy float64。
+
+    DuckDB 的 .df() 在 BIGINT/INT 列含 NULL 时会返回 nullable Int64，其缺失值是
+    pd.NA（而非 np.nan），下游 .values.astype(np.float64) 会因 float(pd.NA) 抛
+    TypeError。此处在数据访问边界统一转为 float64（pd.NA → np.nan），
+    使整条特征流水线只见到 numpy 浮点缺失值。datetime / 字符串列不受影响。
+    """
+    for col in df.columns:
+        dtype = df[col].dtype
+        if is_extension_array_dtype(dtype) and dtype.kind in ("i", "u", "f", "b"):
+            df[col] = df[col].astype("float64")
+    return df
 
 
 class RawRepo:
@@ -74,15 +90,24 @@ class RawRepo:
             df,
         )
 
+    def upsert_stock_basic(self, df: pd.DataFrame) -> int:
+        return self._insert_or_replace(
+            "stock_basic",
+            ["code", "name", "industry", "area", "market", "list_date"],
+            df,
+        )
+
     def load_fundamentals(self, code: str, since: date | None = None) -> pd.DataFrame:
         if since is not None:
-            return self._conn.execute(
+            df = self._conn.execute(
                 "SELECT * FROM fundamentals WHERE code = ? AND date > ? ORDER BY date",
                 [code, since],
             ).df()
-        return self._conn.execute(
-            "SELECT * FROM fundamentals WHERE code = ? ORDER BY date", [code]
-        ).df()
+        else:
+            df = self._conn.execute(
+                "SELECT * FROM fundamentals WHERE code = ? ORDER BY date", [code]
+            ).df()
+        return _coerce_nullable_to_float(df)
 
     # ── fund_flow ─────────────────────────────────────────────────────────────
 
@@ -191,5 +216,31 @@ class RawRepo:
             ).df()
         return self._conn.execute(
             "SELECT * FROM fundamentals_snapshot WHERE code = ? ORDER BY date",
+            [code],
+        ).df()
+
+    # ── financial_indicator ───────────────────────────────────────────────────
+
+    _FI_COLS = [
+        "code", "end_date", "ann_date", "eps", "diluted_eps",
+        "revenue", "revenue_yoy", "net_profit", "net_profit_yoy",
+        "roe", "roa", "gross_margin", "net_margin",
+        "debt_ratio", "bps", "oc_ps", "free_cash_flow",
+    ]
+
+    def upsert_financial_indicator(self, df: pd.DataFrame) -> int:
+        return self._insert_or_replace("financial_indicator", self._FI_COLS, df)
+
+    def load_financial_indicator(
+        self, code: str, since: date | None = None
+    ) -> pd.DataFrame:
+        if since is not None:
+            return self._conn.execute(
+                "SELECT * FROM financial_indicator "
+                "WHERE code = ? AND end_date > ? ORDER BY end_date",
+                [code, since],
+            ).df()
+        return self._conn.execute(
+            "SELECT * FROM financial_indicator WHERE code = ? ORDER BY end_date",
             [code],
         ).df()

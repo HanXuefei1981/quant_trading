@@ -63,14 +63,14 @@ def test_ingest_kline_filters_zero_close(tmp_path):
     ]
     zip2 = tmp_path / "bad.zip"
     with zipfile.ZipFile(zip2, 'w') as zf:
-        zf.writestr("sz/lday/sz999999.day", _make_day_bytes(bad_records))
+        zf.writestr("sz/lday/sz300001.day", _make_day_bytes(bad_records))
 
     conn = duckdb.connect(":memory:")
     migrate(conn)
     raw_repo = RawRepo(conn)
     ingest_kline(zip2, raw_repo)
 
-    df = raw_repo.load_kline("999999")
+    df = raw_repo.load_kline("300001")
     assert len(df) == 1   # 只有 1 条有效记录
 
 
@@ -92,7 +92,7 @@ def test_ingest_kline_windows_backslash_path(tmp_path):
     ]
     zip_path = tmp_path / "windows.zip"
     with zipfile.ZipFile(zip_path, 'w') as zf:
-        zf.writestr(r"sh\lday\sh123456.day", _make_day_bytes(records))
+        zf.writestr(r"sh\lday\sh600001.day", _make_day_bytes(records))
 
     conn = duckdb.connect(":memory:")
     migrate(conn)
@@ -100,5 +100,24 @@ def test_ingest_kline_windows_backslash_path(tmp_path):
     stats = ingest_kline(zip_path, raw_repo)
 
     assert stats.ok == 1
-    df = raw_repo.load_kline("123456")
+    df = raw_repo.load_kline("600001")
     assert len(df) == 1
+
+
+def test_ingest_kline_filters_non_a_share(tmp_path):
+    """非A股代码（ETF/可转债/指数等）应被过滤跳过。"""
+    records = [(20240102, 100, 105, 98, 103, 5e8, 3000)]
+    zip_path = tmp_path / "mixed.zip"
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.writestr("sz/lday/sz000001.day", _make_day_bytes(records))   # A股 ✓
+        zf.writestr("sz/lday/sz123456.day", _make_day_bytes(records))   # 可转债 ✗
+        zf.writestr("sh/lday/sh510001.day", _make_day_bytes(records))   # ETF ✗
+        zf.writestr("sh/lday/sh880001.day", _make_day_bytes(records))   # 指数 ✗
+
+    conn = duckdb.connect(":memory:")
+    migrate(conn)
+    raw_repo = RawRepo(conn)
+    stats = ingest_kline(zip_path, raw_repo)
+
+    assert stats.ok == 1       # 只有 000001 通过
+    assert stats.skipped == 3  # 其余 3 个被跳过

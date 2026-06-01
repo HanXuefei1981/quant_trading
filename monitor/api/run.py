@@ -25,4 +25,12 @@ def create_run_router(work_dir: Path) -> APIRouter:
             "started_at": task.started_at,
         }
 
+    @router.post("/api/kill")
+    async def kill_task() -> dict:
+        manager = TaskManager()
+        if not manager.is_busy:
+            raise HTTPException(status_code=404, detail="No task is running")
+        killed = await manager.kill()
+        return {"killed": killed}
+
     return router

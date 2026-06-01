@@ -37,10 +37,10 @@ class FundFlowCollector(BaseCollector):
         self.delay = delay
 
     def collect(self, codes: list[str] | None = None, since: date | None = None) -> CollectStats:
-        """拉取资金流向，增量写入 DAL fund_flow 表。"""
+        """拉取资金流向（tushare moneyflow），增量写入 DAL fund_flow 表。"""
         if codes is None:
             codes = []
-        from src.data.fund_flow import fetch_fund_flow
+        from src.data.tushare_fetchers import fetch_moneyflow
 
         stats = CollectStats()
         consecutive_errors = 0
@@ -49,7 +49,7 @@ class FundFlowCollector(BaseCollector):
             last_date = since if since is not None else self._meta_repo.get_last_date("fund_flow", code)
 
             try:
-                df = fetch_fund_flow(code, use_cache=False)
+                df = fetch_moneyflow(code, since=last_date)
             except Exception as exc:
                 logger.warning(f"资金流向拉取异常 {code}: {exc}")
                 df = None
@@ -64,6 +64,7 @@ class FundFlowCollector(BaseCollector):
                 continue
 
             consecutive_errors = 0
+            # tushare 已按 since 过滤，此处再次排除 since 日当天数据
             if last_date is not None:
                 df = df[df["date"] > pd.Timestamp(last_date)]
             if df.empty:
@@ -71,8 +72,6 @@ class FundFlowCollector(BaseCollector):
                 time.sleep(self.delay)
                 continue
 
-            df = df.copy()
-            df["code"] = code
             self._raw_repo.upsert_fund_flow(df)
             self._meta_repo.set_last_date("fund_flow", code, df["date"].max().date(), len(df))
             stats.ok += 1
@@ -83,4 +82,44 @@ class FundFlowCollector(BaseCollector):
             time.sleep(self.delay)
 
         logger.info(f"资金流向拉取完成：{stats}")
+        return stats
+
+    def collect_batch(self, since: date | None = None, delay: float = 0.0) -> CollectStats:
+        """按交易日批量拉取全市场资金流向（一次 API 调用 ≈ 全市场一天）。"""
+        from datetime import timedelta, date as date_cls
+        from src.data.tushare_fetchers import fetch_moneyflow_by_date
+
+        stats = CollectStats()
+
+        if since is None:
+            row = self._raw_repo._conn.execute(
+                "SELECT MAX(CAST(date AS DATE)) FROM fund_flow"
+            ).fetchone()
+            since = row[0] if row and row[0] is not None else None
+
+        today = date_cls.today()
+        d = (since + timedelta(days=1)) if since else date_cls(2015, 1, 1)
+
+        while d <= today:
+            try:
+                df = fetch_moneyflow_by_date(d)
+            except Exception as exc:
+                logger.warning("资金流向批量 %s 拉取失败: %s", d.isoformat(), exc)
+                stats.fail += 1
+                d += timedelta(days=1)
+                continue
+
+            if df is not None and not df.empty:
+                self._raw_repo.upsert_fund_flow(df)
+                stats.ok += 1
+                logger.info("资金流向批量 %s: %d 只", d.isoformat(), len(df))
+            else:
+                stats.skipped += 1
+                logger.debug("资金流向 %s: 非交易日，跳过", d.isoformat())
+
+            d += timedelta(days=1)
+            if delay > 0:
+                time.sleep(delay)
+
+        logger.info("资金流向批量完成：交易日=%d 跳过=%d 失败=%d", stats.ok, stats.skipped, stats.fail)
         return stats

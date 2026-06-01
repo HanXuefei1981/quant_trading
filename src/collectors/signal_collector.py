@@ -4,30 +4,15 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 
-import akshare as ak
-import pandas as pd
-
 from src.collectors.base import BaseCollector, CollectStats
 from src.dal.meta_repo import MetaRepo
 from src.dal.raw_repo import RawRepo
 
 logger = logging.getLogger(__name__)
 
-_COL_MAP = {
-    "代码": "code",
-    "股票代码": "code",
-    "上榜日期": "date",
-    "龙虎榜净买额": "lhb_net_buy",
-    "买入额合计": "lhb_buy_amount",
-    "卖出额合计": "lhb_sell_amount",
-}
-
 
 class SignalCollector(BaseCollector):
-    """东财龙虎榜日报 → DuckDB lhb 表（市场级）。
-
-    ⚠️ akshare.stock_lhb_detail_em 在 VPN 开启时有 SSL 错误，需关 VPN 后运行。
-    """
+    """tushare 龙虎榜日报 → DuckDB lhb 表（市场级）。"""
 
     def __init__(
         self,
@@ -46,38 +31,8 @@ class SignalCollector(BaseCollector):
         self._meta_repo = meta_repo
 
     def _fetch_daily(self, target_date: date) -> pd.DataFrame | None:
-        date_str = target_date.strftime("%Y%m%d")
-        try:
-            raw = ak.stock_lhb_detail_em(start_date=date_str, end_date=date_str)
-        except Exception as exc:
-            logger.warning("龙虎榜拉取失败 %s: %s", date_str, exc)
-            return None
-
-        if raw is None or raw.empty:
-            return None
-
-        df = raw.rename(columns={k: v for k, v in _COL_MAP.items() if k in raw.columns})
-        if "code" not in df.columns:
-            logger.warning("龙虎榜字段不全 %s，已有列: %s", date_str, list(df.columns))
-            return None
-
-        if "date" not in df.columns:
-            df["date"] = pd.to_datetime(target_date)
-
-        df["code"] = df["code"].astype(str).str.zfill(6)
-        df["lhb_net_buy"] = pd.to_numeric(df.get("lhb_net_buy", 0), errors="coerce")
-        df["lhb_buy_amount"] = pd.to_numeric(df.get("lhb_buy_amount", 0), errors="coerce")
-        df["lhb_sell_amount"] = pd.to_numeric(df.get("lhb_sell_amount", 0), errors="coerce")
-
-        keep = ["date", "code", "lhb_net_buy", "lhb_buy_amount", "lhb_sell_amount"]
-        df = df[[c for c in keep if c in df.columns]]
-        df = df.dropna(subset=["code"])
-        before = len(df)
-        df = df.drop_duplicates(subset=["code"])
-        dropped = before - len(df)
-        if dropped:
-            logger.debug("龙虎榜同日多条记录去重 %s: 丢弃 %d 行", date_str, dropped)
-        return df if not df.empty else None
+        from src.data.tushare_fetchers import fetch_lhb_daily
+        return fetch_lhb_daily(target_date)
 
     def collect(self, codes: list[str] | None = None, since: date | None = None) -> CollectStats:
         """拉取今日龙虎榜，写入 DAL lhb 表。codes 和 since 参数对市场级采集器均忽略。"""
@@ -98,4 +53,39 @@ class SignalCollector(BaseCollector):
         self._meta_repo.set_last_date("lhb", "__market__", today, len(df))
         stats.ok += 1
         logger.info("龙虎榜 %s 已保存：%d 只股票", today, len(df))
+        return stats
+
+    def backfill(self, since: date) -> CollectStats:
+        """回填 since 之后每个自然日的龙虎榜数据（跳过已有的日期）。
+
+        非交易日接口返回空，自动跳过，不视为失败。
+        """
+        import time
+        from datetime import timedelta
+
+        stats = CollectStats()
+        today = datetime.now().date()
+        existing: set[date] = set()
+        rows = self._raw_repo._conn.execute(
+            "SELECT DISTINCT CAST(date AS DATE) FROM lhb WHERE date > ?", [since]
+        ).fetchall()
+        existing = {r[0] for r in rows}
+
+        cur = since + timedelta(days=1)
+        while cur <= today:
+            if cur in existing:
+                stats.cached += 1
+                cur += timedelta(days=1)
+                continue
+            df = self._fetch_daily(cur)
+            if df is not None and not df.empty:
+                self._raw_repo.upsert_lhb(df)
+                stats.ok += 1
+                logger.info("龙虎榜 %s 补录：%d 条", cur, len(df))
+            else:
+                stats.skipped += 1  # 非交易日或无榜单
+            cur += timedelta(days=1)
+            time.sleep(0.5)
+
+        self._meta_repo.set_last_date("lhb", "__market__", today, stats.ok)
         return stats

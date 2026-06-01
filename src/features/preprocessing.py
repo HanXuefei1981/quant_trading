@@ -68,7 +68,15 @@ def preprocess_features(
 
     dates = result["date"].values
     segs = result["segment"].values
-    feat = result[feature_cols].values.astype(np.float64)
+    # 防御性归一化：特征列可能含 pandas nullable 扩展类型（如 DuckDB 读取含 NULL 的
+    # BIGINT 列得到的 Int64，缺失为 pd.NA）。直接 .astype(np.float64) 会因 float(pd.NA)
+    # 崩溃，故先逐列 to_numeric 强制数值化（pd.NA / 非数值 → np.nan）再转 float64。
+    feat = (
+        result[feature_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=np.float64, na_value=np.nan)
+        .copy()  # to_numpy 在单一 dtype 时可能返回只读视图，后续 feat[mask]=X 需可写
+    )
 
     for d in np.unique(dates):
         mask = dates == d

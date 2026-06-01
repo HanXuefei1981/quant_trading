@@ -25,10 +25,12 @@ def repos():
 
 
 def _fake_reports_raw() -> pd.DataFrame:
+    """模拟 fetch_report_rc 的输出列：date, code, institution, rating。"""
     return pd.DataFrame({
-        "日期": ["2024-01-02", "2024-01-03"],
-        "机构": ["华泰证券", "中信证券"],
-        "东财评级": ["买入", "增持"],
+        "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+        "code": "000001",
+        "institution": ["华泰证券", "中信证券"],
+        "rating": ["买入", "增持"],
     })
 
 
@@ -44,7 +46,7 @@ def test_collect_report_writes_rows(repos):
     raw_repo, meta_repo = repos
     collector = ReportCollector(raw_repo=raw_repo, meta_repo=meta_repo, mode="report", delay=0)
 
-    with patch("akshare.stock_research_report_em", return_value=_fake_reports_raw()):
+    with patch("src.data.tushare_fetchers.fetch_report_rc", return_value=_fake_reports_raw()):
         stats = collector.collect(codes=["000001"])
 
     assert stats.ok == 1
@@ -69,7 +71,7 @@ def test_collect_report_network_failure(repos):
     raw_repo, meta_repo = repos
     collector = ReportCollector(raw_repo=raw_repo, meta_repo=meta_repo, mode="report", delay=0)
 
-    with patch("akshare.stock_research_report_em", return_value=None):
+    with patch("src.data.tushare_fetchers.fetch_report_rc", return_value=None):
         stats = collector.collect(codes=["000001"])
 
     assert stats.fail == 1

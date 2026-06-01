@@ -43,7 +43,7 @@ async def _fake_run_never_ends(self, task: Task, work_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 1: CMD_MAP contains all 10 expected keys
+# Test 1: CMD_MAP contains all expected command keys
 # ---------------------------------------------------------------------------
 
 def test_cmd_map_has_all_keys():
@@ -53,6 +53,8 @@ def test_cmd_map_has_all_keys():
         "collect",
         "fetch-fund",
         "fetch-flow",
+        "fetch-financial",
+        "fetch-reports",
         "phase1",
         "phase2-rolling",
         "phase2-final",

@@ -106,11 +106,13 @@ def _run_tdx_pipeline(sample_size: int = None, use_cache: bool = True) -> pd.Dat
         logger.info(f"调试模式：仅处理 {sample_size} 只股票")
 
     # 北向资金一次性加载（全市场共享，按日期 join）
-    from src.data.fund_flow import load_northbound_flow
-    north_df = load_northbound_flow()
-    if north_df is not None:
+    from src.dal.connection import get_db as _get_db
+    from src.dal.raw_repo import RawRepo as _RawRepo
+    north_df = _RawRepo(_get_db()).load_northbound()
+    if north_df is not None and not north_df.empty:
         logger.info(f"北向资金数据已加载：{len(north_df)} 条")
     else:
+        north_df = None
         logger.info("北向资金数据未找到，north_net_* 因子将全部为 NaN（可运行 fetch-flow 拉取）")
 
     logger.info(f"Step 2+3: 读取本地文件 + 合并基本面 + 合并资金流向 + 特征工程（共 {len(all_codes)} 只）")
@@ -297,7 +299,9 @@ def load_features_from_db(feature_repo=None) -> pd.DataFrame:
     from src.dal.feature_repo import FeatureRepo as _FeatureRepo
     if feature_repo is None:
         from src.dal.connection import get_db
-        feature_repo = _FeatureRepo(get_db())
+        # 只读连接：Phase 2/3 仅读 features（模型/回测结果另存磁盘），用只读连接可与
+        # 开着的 monitor 并行运行，不抢 DuckDB 写锁。
+        feature_repo = _FeatureRepo(get_db(read_only=True))
 
     date_range = feature_repo.get_feature_date_range()
     if date_range is None:
@@ -307,10 +311,21 @@ def load_features_from_db(feature_repo=None) -> pd.DataFrame:
 
     date_from, date_to = date_range
     df = feature_repo.load_features(date_from, date_to)
+
+    # 过滤无标签的最近交易日行：features 表含 Phase 1 写入的最近 5 个交易日（label=NaN，
+    # 仅供 scan 推断）。训练/回测需要 label 与 future_ret，故在此剔除。
+    if "label" in df.columns:
+        before = len(df)
+        df = df[df["label"].notna()].reset_index(drop=True)
+        dropped = before - len(df)
+        if dropped:
+            logger.info("已过滤 %d 行无标签的最近交易日数据（仅供推断 scan）", dropped)
+
     logger.info(
         "从 DuckDB features 表加载完成：%d 行，"
         "时间范围 %s ~ %s，%d 只股票",
-        len(df), date_from, date_to,
+        len(df), df["date"].min().date() if len(df) else date_from,
+        df["date"].max().date() if len(df) else date_to,
         df["code"].nunique() if "code" in df.columns else 0,
     )
     return df

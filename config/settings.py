@@ -2,10 +2,21 @@
 import os
 from pathlib import Path
 
+# 加载 .env 文件（存在时）
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
 ROOT_DIR = Path(__file__).parent.parent
 DATA_DIR = ROOT_DIR / "data"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
+
+# Tushare Pro 配置（从 .env 读取，不要硬编码）
+TUSHARE_TOKEN: str = os.getenv("TUSHARE_TOKEN", "")
+TUSHARE_HTTP_URL: str = os.getenv("TUSHARE_HTTP_URL", "http://lianghua.nanyangqiankun.top")
 
 # 通达信本地数据目录（可通过环境变量 TDX_VIPDOC_DIR 覆盖）
 TDX_VIPDOC_DIR = Path(os.getenv("TDX_VIPDOC_DIR", str(Path.home() / "tdx_data")))

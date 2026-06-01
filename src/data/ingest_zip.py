@@ -29,6 +29,14 @@ _DAY_PATTERN = re.compile(r'(?:sh|sz|bj)[/\\]lday[/\\](?:sh|sz|bj)(\d{6})\.day$'
 _START_DATE_INT = int(START_DATE)             # e.g. 20210101
 _BATCH_STOCKS = 500
 
+# A股有效代码前缀白名单（过滤 ETF/基金/可转债/指数/B股）
+# 00=深市主板, 30=创业板, 60=沪市主板, 68=科创板, 83/87=北交所
+_A_SHARE_PREFIXES = frozenset(('00', '30', '60', '68', '83', '87'))
+
+
+def _is_a_share_code(code: str) -> bool:
+    return len(code) == 6 and code[:2] in _A_SHARE_PREFIXES
+
 
 def _parse_day_bytes(data: bytes, code: str) -> pd.DataFrame | None:
     """将单只股票的 .day 二进制内容解析为 DataFrame。"""
@@ -101,6 +109,9 @@ def ingest_kline(
         logger.info("hsjday.zip: 共 %d 只股票文件", total)
 
         for i, (name, code) in enumerate(day_files, 1):
+            if not _is_a_share_code(code):
+                stats.skipped += 1
+                continue
             try:
                 data = zf.read(name)
                 df = _parse_day_bytes(data, code)

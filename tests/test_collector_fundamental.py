@@ -23,10 +23,12 @@ def repos():
     return RawRepo(conn), MetaRepo(conn)
 
 
-def _fake_fundamentals(n: int = 3) -> pd.DataFrame:
+def _fake_fundamentals(n: int = 3, code: str = "000001") -> pd.DataFrame:
+    """模拟 fetch_daily_basic 的返回（含 code 列，与 fundamentals 表 12 列对齐）。"""
     dates = pd.date_range("2024-01-02", periods=n, freq="B")
     return pd.DataFrame({
         "date": dates,
+        "code": code,
         "pe_ttm": [15.0] * n,
         "pe_static": [14.0] * n,
         "pb": [1.5] * n,
@@ -44,7 +46,7 @@ def test_collect_first_time_writes_all_rows(repos):
     raw_repo, meta_repo = repos
     collector = FundamentalCollector(raw_repo=raw_repo, meta_repo=meta_repo)
 
-    with patch("src.data.fundamentals.fetch_fundamentals", return_value=_fake_fundamentals(3)):
+    with patch("src.data.tushare_fetchers.fetch_daily_basic", return_value=_fake_fundamentals(3)):
         stats = collector.collect(codes=["000001"])
 
     assert stats.ok == 1
@@ -61,7 +63,7 @@ def test_collect_incremental_skips_old_rows(repos):
     meta_repo.set_last_date("fundamentals", "000001", date(2024, 1, 3))
 
     collector = FundamentalCollector(raw_repo=raw_repo, meta_repo=meta_repo)
-    with patch("src.data.fundamentals.fetch_fundamentals", return_value=_fake_fundamentals(3)):
+    with patch("src.data.tushare_fetchers.fetch_daily_basic", return_value=_fake_fundamentals(3)):
         stats = collector.collect(codes=["000001"])
 
     assert stats.ok == 1
@@ -73,7 +75,7 @@ def test_collect_network_failure_counts_fail(repos):
     raw_repo, meta_repo = repos
     collector = FundamentalCollector(raw_repo=raw_repo, meta_repo=meta_repo)
 
-    with patch("src.data.fundamentals.fetch_fundamentals", return_value=None):
+    with patch("src.data.tushare_fetchers.fetch_daily_basic", return_value=None):
         stats = collector.collect(codes=["000001"])
 
     assert stats.fail == 1

@@ -40,6 +40,8 @@ docs/dev-log/
 
 | 日期 | 主题 | 类型 |
 |------|------|------|
+| [2026-06-01](2026-06-01.md) | Phase1 流式预处理(省~8GB) + 修9陈旧测试 + 基本面缺口补全 + 重训回测(夏普2.57) + scan富信息表(fetch-basic) + 同步至05-29 + 数据覆盖说明书 | perf / fix / data / feat / docs |
+| [2026-05-20](2026-05-20-m3-ic-validation.md) | M3 因子 IC 验收 + 北向 bug 修复 + EPS/研报/LHB 因子效果分析（暂排除训练） | fix / analysis |
 | [2026-05-19](2026-05-19.md) | 修复 sync macOS 解压 Windows zip 路径 bug + 数据更新至 2026-05-18 + 模型重训（测试 IC +31%） | fix / data |
 | [2026-05-18](2026-05-18.md) | 个股资金流向本地下载脚本（TDD 全流程，14 测试） | feat |
 | [2026-05-14](2026-05-14.md) | Phase1+2重跑验证基本面因子 + Walk-Forward CV诊断 + --final全量生产模型 | feat / analysis |

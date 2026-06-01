@@ -15,12 +15,6 @@ from src.dal.raw_repo import RawRepo
 
 logger = logging.getLogger(__name__)
 
-_REPORT_COL_MAP = {
-    "日期": "date",
-    "机构": "institution",
-    "东财评级": "rating",
-}
-
 
 class ReportCollector(BaseCollector):
     """研报列表 + EPS 共识 → DuckDB reports / eps_snapshot 表。
@@ -49,23 +43,9 @@ class ReportCollector(BaseCollector):
         self.delay = delay
         self.mode = mode
 
-    def _fetch_report(self, code: str) -> pd.DataFrame | None:
-        try:
-            raw = ak.stock_research_report_em(symbol=code)
-        except Exception as exc:
-            logger.warning("研报拉取失败 %s: %s", code, exc)
-            return None
-        if raw is None or raw.empty:
-            return None
-        cols_needed = [c for c in _REPORT_COL_MAP if c in raw.columns]
-        df = raw[cols_needed].rename(columns=_REPORT_COL_MAP).copy()
-        if "date" not in df.columns:
-            logger.warning("研报数据缺少日期列 %s，跳过", code)
-            return None
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df["code"] = code
-        df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
-        return df if not df.empty else None
+    def _fetch_report(self, code: str, since: date | None = None) -> pd.DataFrame | None:
+        from src.data.tushare_fetchers import fetch_report_rc
+        return fetch_report_rc(code, since=since)
 
     def _fetch_eps(self, code: str) -> pd.DataFrame | None:
         try:
@@ -100,7 +80,7 @@ class ReportCollector(BaseCollector):
         for code in tqdm(codes, desc=f"研报采集[{self.mode}]"):
             last_date = since if since is not None else self._meta_repo.get_last_date(table, code)
 
-            df = self._fetch_report(code) if self.mode == "report" else self._fetch_eps(code)
+            df = self._fetch_report(code, since=last_date) if self.mode == "report" else self._fetch_eps(code)
 
             if df is None or df.empty:
                 stats.fail += 1
