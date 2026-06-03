@@ -541,6 +541,7 @@ def phase3(args):
         max_sector_weight=getattr(args, "max_sector_weight", 0.40),
         max_turnover=getattr(args, "max_turnover", 0.5),
         replace_only=getattr(args, "replace_only", False),
+        confirm_streak=int(getattr(args, "confirm", 0) or 0),
     )
     benchmark = build_benchmark(signal_df, start, end)
 
@@ -588,6 +589,19 @@ def scan(args):
     top_df = enrich_signals(
         signal_df.head(buffer), get_db(read_only=True), latest_date.date()
     )
+    top_df["code"] = top_df["code"].astype(str)
+
+    # 连榜（截至当前连续在 Top-buffer 的次数）：过滤"一日游"，连榜=1 多为单日异动
+    from src.features.scan_history import (
+        load_scan_history, consecutive_streaks, classify_actions,
+    )
+    out_dir = PROCESSED_DIR.parent / "backtest"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _prior = load_scan_history(str(out_dir), str(latest_date.date()))
+    _streaks = consecutive_streaks(_prior + [set(top_df["code"])])
+    top_df["streak"] = top_df["code"].map(lambda c: _streaks.get(str(c), 1))
+
+    confirm_k = int(getattr(args, "confirm", 0) or 0)
 
     def _fmt(v, fmt="{:.1f}"):
         return "—" if pd.isna(v) else fmt.format(v)
@@ -617,24 +631,78 @@ def scan(args):
         ("市销率", 7, lambda r: _fmt(r["ps"]), False),
         ("净资收益率", 11, lambda r: _fmt(r["roe"]), False),
         ("净利润同比", 11, lambda r: _fmt(r["net_profit_yoy"]), False),
+        ("连榜", 5, lambda r: int(r["streak"]), False),
     ]
 
+    def _marker(r):
+        # 标注建仓建议：连榜≥confirm_k 为可建仓✓，不足为观察⏳；buffer 区为缓冲
+        if r["rank"] > top_k:
+            return ""
+        if confirm_k <= 0:
+            return " ◀"
+        return " ✓可建仓" if r["streak"] >= confirm_k else " ⏳观察"
+
     header = " ".join(_pad(c[0], c[1], c[3]) for c in columns)
-    table_w = _disp_w(header) + 2
+    table_w = _disp_w(header) + 6
     print(f"\n{'=' * table_w}")
-    print(f"  信号扫描结果  |  日期：{latest_date.date()}  |  Top-{buffer} 候选池（前 {top_k} 只为建仓候选）")
+    _conf = f"  确认阈值：连榜≥{confirm_k}" if confirm_k > 0 else ""
+    print(f"  信号扫描结果  |  日期：{latest_date.date()}  |  Top-{buffer} 候选池（前 {top_k} 只为建仓候选）{_conf}")
     print(f"{'=' * table_w}")
     print(header)
     print('-' * table_w)
     for _, r in top_df.iterrows():
-        marker = " ◀" if r["rank"] <= top_k else ""
-        print(" ".join(_pad(c[2](r), c[1], c[3]) for c in columns) + marker)
+        print(" ".join(_pad(c[2](r), c[1], c[3]) for c in columns) + _marker(r))
     print('=' * table_w)
     if top_df["name"].isna().all():
         print("  ⚠ 名称/行业全为空：请先运行 python main.py fetch-basic 采集 stock_basic")
-    print(f"  说明：前 {top_k} 只（标◀）为当期建仓候选，{top_k+1}~{buffer} 只为观察缓冲区；"
-          f"持仓跌出前 {buffer} 名 → 纳入卖出候选")
-    print(f"  字段：总市值单位亿元  市盈率为 TTM（亏损股为 —）  净资收益率/净利润同比取最新财报期\n")
+    if confirm_k > 0:
+        print(f"  说明：前 {top_k} 只中【连榜≥{confirm_k}】标 ✓可建仓，连榜不足标 ⏳观察（疑似一日游，建议观望）；"
+              f"持仓跌出前 {buffer} 名 → 卖出候选")
+    else:
+        print(f"  说明：前 {top_k} 只（标◀）为当期建仓候选，{top_k+1}~{buffer} 只为观察缓冲区；"
+              f"持仓跌出前 {buffer} 名 → 卖出候选（加 --confirm K 启用连榜确认）")
+    print(f"  字段：连榜=截至今日连续在榜次数（=1 多为单日异动）  总市值亿元  市盈率 TTM（亏损股 —）\n")
+
+    # ── replace-only 持仓分类（提供 --holdings 时）：继续持有 / 卖出 / 新建仓 ──
+    holdings_arg = getattr(args, "holdings", None)
+    if holdings_arg:
+        held = {c.strip().zfill(6) for c in str(holdings_arg).split(",") if c.strip()}
+        buffer_codes = set(top_df["code"])
+        topk_codes = set(top_df.loc[top_df["rank"] <= top_k, "code"])
+        acts = classify_actions(buffer_codes, topk_codes, _streaks, held, max(confirm_k, 1))
+        name_of = dict(zip(top_df["code"], top_df["name"].fillna("—")))
+        rank_of = dict(zip(top_df["code"], top_df["rank"]))
+        # 已跌出榜单的持仓在 top_df 里没有名称，从 stock_basic 补查
+        missing = [c for c in held if c not in name_of]
+        if missing:
+            try:
+                _ph = ", ".join("?" for _ in missing)
+                _nb = get_db(read_only=True).execute(
+                    f"SELECT code, name FROM stock_basic WHERE code IN ({_ph})", missing
+                ).fetchall()
+                for _c, _n in _nb:
+                    name_of[str(_c).zfill(6)] = _n
+            except Exception:
+                pass
+
+        def _line(codes, with_rank=True):
+            if not codes:
+                return "  （无）"
+            parts = []
+            for c in sorted(codes, key=lambda x: rank_of.get(x, 999)):
+                tag = f"#{rank_of[c]}" if (with_rank and c in rank_of) else ""
+                parts.append(f"{c} {name_of.get(c, '—')}{tag}")
+            return "  " + " · ".join(parts)
+
+        print(f"{'-' * table_w}")
+        print(f"  【replace-only 操作建议】现持仓 {len(held)} 只，确认阈值连榜≥{max(confirm_k, 1)}")
+        print(f"  ✅ 继续持有（仍在 Top-{buffer}，{len(acts['hold'])} 只）：")
+        print(_line(acts["hold"]))
+        print(f"  ❌ 卖出（已跌出 Top-{buffer}，{len(acts['sell'])} 只）：")
+        print(_line(acts["sell"], with_rank=False))
+        print(f"  🆕 新建仓（Top-{top_k} 且连榜达标且未持有，{len(acts['buy'])} 只）：")
+        print(_line(acts["buy"]))
+        print(f"{'=' * table_w}\n")
 
     # 保存富信息 CSV（列名中文）
     out_path = PROCESSED_DIR.parent / "backtest" / f"scan_{latest_date.date()}.csv"
@@ -643,7 +711,7 @@ def scan(args):
         "rank": "排名", "code": "代码", "name": "名称", "industry": "行业", "segment": "板块",
         "close": "收盘价", "signal": "信号值", "signal_pct": "信号分位",
         "market_cap_yi": "总市值亿", "pe_ttm": "市盈率", "pb": "市净率", "ps": "市销率",
-        "roe": "净资收益率", "net_profit_yoy": "净利润同比",
+        "roe": "净资收益率", "net_profit_yoy": "净利润同比", "streak": "连榜",
     }
     save_cols = list(csv_rename.keys())
     save_df = top_df[[c for c in save_cols if c in top_df.columns]].rename(columns=csv_rename)
@@ -681,6 +749,10 @@ def main():
     parser.add_argument("--max-turnover", type=float, default=0.5, dest="max_turnover", help="Phase3: 单次最大单向换手率（默认0.5）")
     parser.add_argument("--equal-weight", action="store_true", dest="equal_weight", help="Phase3: 等权重替代信号加权")
     parser.add_argument("--replace-only", action="store_true", dest="replace_only", help="Phase3/scan: 散户模式，只换出跌出候选池的股票，不做存量再平衡")
+    parser.add_argument("--confirm", type=int, default=0,
+                        help="scan: 连榜确认阈值 K，仅连续 K 次在榜的票标为可建仓（过滤一日游，0=关闭）")
+    parser.add_argument("--holdings", default=None,
+                        help="scan: 现持仓代码（逗号分隔），输出 继续持有/卖出/新建仓 三栏操作建议")
     parser.add_argument("--retrain", action="store_true", dest="retrain",
                         help="update: 增量更新完成后触发 Phase 2 滚动窗口重训")
     parser.add_argument("--since", default=None,

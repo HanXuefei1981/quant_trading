@@ -12,6 +12,7 @@ from config.settings import (
 )
 from src.backtest.portfolio import build_target_weights, apply_turnover_limit
 from src.features.preprocessing import get_segment
+from src.features.scan_history import update_streak
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ def run_backtest(
     max_sector_weight: float = 0.40,
     max_turnover: float = 0.5,
     replace_only: bool = False,
+    confirm_streak: int = 0,
 ) -> dict:
     """
     回测主函数（每 rebalance_every 个交易日调仓一次）。
@@ -110,6 +112,12 @@ def run_backtest(
       持仓股只要仍在 Top-(top_k × buffer) 候选池内就不动；
       只卖出跌出候选池的股票，并用所得现金等额买入候选池中
       当前未持有的最高信号股票。不做存量仓位的权重调整。
+
+    confirm_streak>0（连榜确认）：
+      逐交易日维护每只股在 Top-(top_k×1.5) 候选池的连续在榜次数；
+      **新建仓**只允许连榜≥confirm_streak 的股票（过滤单日异动"一日游"），
+      已持仓股不受影响、按正常退出逻辑处理。冷启动前 confirm_streak-1 个
+      调仓日因无票达标可能空仓。
     """
     mask = (signal_df["date"] >= pd.to_datetime(start_date)) & \
            (signal_df["date"] <= pd.to_datetime(end_date))
@@ -132,12 +140,20 @@ def run_backtest(
     trade_log: list[dict] = []
 
     rebalance_idx = set(range(0, len(dates), rebalance_every))
+    buffer_k = int(top_k * 1.5)
+    streak: dict[str, int] = {}          # code -> 截至当日连续在候选池次数
 
     for i, date in enumerate(dates):
         # ── 计算当日组合市值 ─────────────────────────────────────────
         stock_value = sum(holdings.values())
         portfolio_value = cash + stock_value
         equity_list.append((date, portfolio_value))
+
+        # ── 逐日维护连榜（基于当日 Top-buffer 信号成员）──────────────
+        if confirm_streak > 0:
+            day_sig = signal_pivot.loc[date].dropna()
+            pool = set(day_sig.nlargest(buffer_k).index) if not day_sig.empty else set()
+            streak = update_streak(streak, pool)
 
         if i == len(dates) - 1:
             break
@@ -192,9 +208,12 @@ def run_backtest(
             held = set(holdings.keys())
             n_slots = top_k - len(held)
             if n_slots > 0 and cash > 1.0:
-                candidates = sig_today[
+                buyable = sig_today[
                     sig_today.index.isin(candidate_set) & ~sig_today.index.isin(held)
-                ].nlargest(n_slots)
+                ]
+                if confirm_streak > 0:  # 新建仓须连榜达标，过滤一日游
+                    buyable = buyable[[streak.get(c, 0) >= confirm_streak for c in buyable.index]]
+                candidates = buyable.nlargest(n_slots)
                 per_stock = cash / max(len(candidates), 1) / (1 + COMMISSION_RATE + SLIPPAGE)
                 for code in candidates.index:
                     if (code in close_pivot.columns
@@ -210,8 +229,18 @@ def run_backtest(
                                        "amount": buy_amt, "cost": cost})
         else:
             # ── 机构式：按目标权重全量再平衡 ────────────────────────
+            sig_for_target = sig_today
+            if confirm_streak > 0:
+                # 候选范围限定为：已持仓 ∪ 连榜达标股；新建仓须连榜确认，持仓不强制卖
+                keep = [
+                    (streak.get(c, 0) >= confirm_streak) or (c in holdings)
+                    for c in sig_today.index
+                ]
+                sig_for_target = sig_today[keep]
+                if sig_for_target.empty:
+                    continue
             target_wts = build_target_weights(
-                sig_today, segment_map,
+                sig_for_target, segment_map,
                 top_k=top_k,
                 max_stock_weight=max_stock_weight,
                 max_sector_weight=max_sector_weight,

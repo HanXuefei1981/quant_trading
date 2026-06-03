@@ -75,7 +75,7 @@ A 股是散户主导的情绪市场，相对于美股需要更注重：
 | `python main.py 1 [--sample N]` | Phase 1：数据 + 特征 | K 线 + 基本面 + 信号合并 → 因子；逐日流式预处理写表（低内存）|
 | `python main.py 2 [--rolling] [--final]` | Phase 2：模型训练 | LightGBM 三分类 + Ridge 回归，按 IC 加权集成；`--rolling` 滚动窗口，`--final` 全量重训生产模型 |
 | `python main.py 3 [--top-k 50 --rebalance 5]` | Phase 3：组合回测 | 含费率、板块上限、换手率上限 |
-| `python main.py scan --top-k 10 [--replace-only]` | 实时扫描 | 用最新截面（无标签）出 Top-K 候选；输出含名称/行业/估值（PE/PB/PS/市值）/财务（ROE/净利同比）的富信息表，存 `data/backtest/scan_YYYY-MM-DD.csv`（需先 `fetch-basic` 才有名称/行业）|
+| `python main.py scan --top-k 10 [--confirm K] [--holdings c1,c2]` | 实时扫描 | 最新截面 Top-K 富信息表（名称/行业/估值/财务 + **连榜**）；`--confirm K` 仅把连续 K 次在榜的标为✓可建仓（过滤一日游）；`--holdings` 输出 继续持有/卖出/新建仓 三栏。存 `data/backtest/scan_YYYY-MM-DD.csv`（需先 `fetch-basic`）|
 | `python main.py update` | 日常增量更新 | tushare 批量拉当日全市场 K 线 + 北向（T+1）；随后跑 `1` 增量重建特征 |
 
 ---
@@ -161,6 +161,15 @@ A 股是散户主导的情绪市场，相对于美股需要更注重：
 - 跌出缓冲池才卖出
 - 用所得现金等额买入新候选
 - **不做存量再平衡**，符合散户低频操作习惯
+
+**防一日游 / 减少反复调仓（`--confirm` + `--holdings`）**：
+
+`连榜` 列记录每只票"截至今日连续在 Top-buffer 的次数"——单日异动冲榜的票连榜=1。
+
+- `--confirm K`：只把**连榜≥K** 且在 Top-k 的票标为 `✓可建仓`，连榜不足标 `⏳观察`（疑似一日游，建议观望）。
+- `--holdings c1,c2,...`：传入现持仓，按 replace-only 输出三栏 **继续持有**（仍在 Top-buffer）/ **卖出**（已跌出）/ **新建仓**（Top-k 且连榜达标且未持有）。
+
+> 实战纪律建议：每 5 个交易日操作一次 + `--confirm 2~3` + `--holdings`，配合行业上限，可有效避开"今天暴涨冲榜、明天反转套牢"的一日游股票。
 
 ### 20 万散户交易体系
 
