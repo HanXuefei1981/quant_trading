@@ -749,8 +749,8 @@ def main():
     parser.add_argument("--max-turnover", type=float, default=0.5, dest="max_turnover", help="Phase3: 单次最大单向换手率（默认0.5）")
     parser.add_argument("--equal-weight", action="store_true", dest="equal_weight", help="Phase3: 等权重替代信号加权")
     parser.add_argument("--replace-only", action="store_true", dest="replace_only", help="Phase3/scan: 散户模式，只换出跌出候选池的股票，不做存量再平衡")
-    parser.add_argument("--confirm", type=int, default=0,
-                        help="scan: 连榜确认阈值 K，仅连续 K 次在榜的票标为可建仓（过滤一日游，0=关闭）")
+    parser.add_argument("--confirm", type=int, default=2,
+                        help="scan/Phase3: 连榜确认阈值 K，仅连续 K 次在榜的票可建仓（过滤一日游）。默认 2（回测验证最优）；传 0 关闭")
     parser.add_argument("--holdings", default=None,
                         help="scan: 现持仓代码（逗号分隔），输出 继续持有/卖出/新建仓 三栏操作建议")
     parser.add_argument("--retrain", action="store_true", dest="retrain",
