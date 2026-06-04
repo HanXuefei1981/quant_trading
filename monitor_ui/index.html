@@ -208,37 +208,33 @@ tr:hover td{background:#1e293b40}
     <div class="section-title">流程控制台</div>
 
     <div class="ctrl-group">
-      <div class="ctrl-group-label">数据采集 <span style="color:#92400e;font-size:9px">▶ 执行前确认已关闭 VPN</span></div>
+      <div class="ctrl-group-label">日常更新 <span style="color:#92400e;font-size:9px">▶ 执行前确认已关闭 VPN</span></div>
       <div class="btn-grid">
+        <button id="btn-daily" class="btn primary" onclick="runCmd('daily')">✨ 一键日更（update→特征增量→scan）</button>
         <button id="btn-update" class="btn" onclick="runCmd('update')">日 Kline / 北向</button>
         <button id="btn-fetch-fund" class="btn" onclick="runCmd('fetch-fund')">基本面（批量）</button>
         <button id="btn-fetch-flow" class="btn" onclick="runCmd('fetch-flow')">主力资金流向（批量）</button>
+        <button id="btn-phase1" class="btn" onclick="runCmd('phase1')">Phase 1 增量（日更）</button>
+        <button id="btn-scan" class="btn" onclick="runCmd('scan')">Scan Top-50</button>
+      </div>
+    </div>
+
+    <div class="ctrl-group">
+      <div class="ctrl-group-label">全量重建与训练</div>
+      <div class="btn-grid">
+        <button id="btn-phase1-full" class="btn warn-btn full" onclick="runCmd('phase1-full')">⚠ Phase 1 全量重建（耗时/大写盘）</button>
+        <button id="btn-phase2-rolling" class="btn" onclick="runCmd('phase2-rolling')">Phase 2 滚动</button>
+        <button id="btn-phase2-final" class="btn" onclick="runCmd('phase2-final')">Phase 2 全量</button>
+        <button id="btn-phase3" class="btn full" onclick="runCmd('phase3')">Phase 3 回测</button>
+      </div>
+    </div>
+
+    <div class="ctrl-group">
+      <div class="ctrl-group-label">其他数据采集 <span style="color:#92400e;font-size:9px">▶ 关闭 VPN</span></div>
+      <div class="btn-grid">
         <button id="btn-collect" class="btn" onclick="runCmd('collect')">龙虎榜</button>
         <button id="btn-fetch-financial" class="btn" onclick="runCmd('fetch-financial')">财务指标</button>
         <button id="btn-fetch-reports" class="btn" onclick="runCmd('fetch-reports')">研报 / EPS</button>
-      </div>
-    </div>
-
-    <div class="ctrl-group">
-      <div class="ctrl-group-label">特征工程</div>
-      <div class="btn-grid">
-        <button id="btn-phase1" class="btn full" onclick="runCmd('phase1')">Phase 1 特征计算</button>
-      </div>
-    </div>
-
-    <div class="ctrl-group">
-      <div class="ctrl-group-label">模型训练</div>
-      <div class="btn-grid">
-        <button id="btn-phase2-rolling" class="btn" onclick="runCmd('phase2-rolling')">Phase 2 滚动</button>
-        <button id="btn-phase2-final" class="btn" onclick="runCmd('phase2-final')">Phase 2 全量</button>
-      </div>
-    </div>
-
-    <div class="ctrl-group">
-      <div class="ctrl-group-label">组合回测</div>
-      <div class="btn-grid">
-        <button id="btn-phase3" class="btn" onclick="runCmd('phase3')">Phase 3 回测</button>
-        <button id="btn-scan" class="btn" onclick="runCmd('scan')">Scan Top-50</button>
       </div>
     </div>
   </div>
