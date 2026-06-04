@@ -444,11 +444,11 @@ def phase1(args):
         logger.warning("建议先运行: python main.py fetch-fund  （约 1-2 小时）")
 
     if getattr(args, "full", False):
-        from src.features.assembler import assemble, _write_features_watermark
+        from src.features.assembler import assemble, write_features_watermark
         from src.dal.meta_repo import MetaRepo
         logger.info("Phase 1【全量重建】：assemble() 重算全表（耗时较长、写盘量大）")
         df = assemble(sample_size=args.sample)
-        _write_features_watermark(df, MetaRepo(conn))
+        write_features_watermark(df, MetaRepo(conn))
     else:
         from src.features.assembler import assemble_incremental
         logger.info("Phase 1【增量日更】：assemble_incremental() 仅处理新交易日")
@@ -738,7 +738,7 @@ def main():
                         help="sync 命令专用：通达信压缩包完整路径（如 /path/to/hsjday-2026-05-12.zip）")
     parser.add_argument("--refresh", action="store_true",
                         help="fetch-fund 专用：忽略本地缓存，强制重新拉取")
-    parser.add_argument("--full", action="store_true", dest="full",
+    parser.add_argument("--full", action="store_true",
                         help="phase1(1): 全量重建特征表（默认增量日更，仅处理新交易日）")
     parser.add_argument("--sample", type=int, default=None, help="调试时限制股票数量")
     parser.add_argument("--delay", type=float, default=0.3, help="拉取间隔（秒）")

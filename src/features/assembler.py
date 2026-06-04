@@ -255,7 +255,7 @@ def assemble(
 
 
 
-def _write_features_watermark(df: "pd.DataFrame", meta_repo) -> "date | None":
+def write_features_watermark(df: "pd.DataFrame", meta_repo) -> "date | None":
     """把 features 水位写为 df 中最后【有标签】日（无标签则用最大日）。
 
     增量与全量两条路径共用，保证水位语义一致：下次增量从此日向前重算，
@@ -314,7 +314,7 @@ def assemble_incremental(
     if since is None:
         logger.info("features 水位为空，执行全量组装")
         result = assemble(raw_repo=raw_repo, feature_repo=feature_repo)
-        _write_features_watermark(result, meta_repo)
+        write_features_watermark(result, meta_repo)
         return result
 
     since_ts = pd.Timestamp(since)
@@ -390,7 +390,7 @@ def assemble_incremental(
 
     # 水位设为最后**有标签**日：下次增量从此向前重算，给之前无标签的最近行补上标签，
     # 并延伸新的无标签尾部，保证标签最终都被填充。
-    new_max_date = _write_features_watermark(combined, meta_repo)
+    new_max_date = write_features_watermark(combined, meta_repo)
     logger.info(
         f"增量完成：新增 {len(combined)} 行（含无标签最近行），已写入 FeatureRepo，"
         f"水位（最后有标签日）更新至 {new_max_date}"

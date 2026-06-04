@@ -43,7 +43,7 @@ def test_phase1_branches_on_full():
 
 
 def test_phase1_full_writes_watermark():
-    """phase1 全量分支必须回写水位（调用 _write_features_watermark）。"""
+    """phase1 全量分支必须回写水位（调用 write_features_watermark）。"""
     import main as m
     src = inspect.getsource(m.phase1)
-    assert "_write_features_watermark" in src, "phase1 全量分支未回写 features 水位"
+    assert "write_features_watermark" in src, "phase1 全量分支未回写 features 水位"
