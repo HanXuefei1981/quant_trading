@@ -730,9 +730,33 @@ def scan(args):
     logger.info(f"完整候选列表（含基本面）已保存至 {out_path}")
 
 
+def daily(args):
+    """一键日更：update → fetch-fund → fetch-flow → Phase1(增量) → scan。
+
+    fail-fast：任一步抛异常即记录失败步骤并以退出码 1 结束，后续步骤不执行。
+    链中 Phase1 强制走增量（args.full=False）。
+    """
+    args.full = False  # 链中 Phase1 始终增量
+    steps = [
+        ("update", update),
+        ("fetch-fund", fetch_fund),
+        ("fetch-flow", fetch_flow),
+        ("1(增量)", phase1),
+        ("scan", scan),
+    ]
+    for name, fn in steps:
+        logger.info(f"===== 一键日更 ▶ {name} =====")
+        try:
+            fn(args)
+        except Exception:
+            logger.exception(f"一键日更在步骤 [{name}] 失败，已中止")
+            raise SystemExit(1)
+    logger.info("===== 一键日更完成 =====")
+
+
 def main():
     parser = argparse.ArgumentParser(description="A 股量化交易系统")
-    parser.add_argument("phase", choices=["ingest", "sync", "collect", "fetch-fund", "fetch-flow", "fetch-financial", "fetch-reports", "fetch-basic", "update", "1", "2", "3", "scan"],
+    parser.add_argument("phase", choices=["ingest", "sync", "collect", "fetch-fund", "fetch-flow", "fetch-financial", "fetch-reports", "fetch-basic", "update", "daily", "1", "2", "3", "scan"],
                         help="运行阶段：sync=同步TDX数据 | collect=采集原始数据 | fetch-fund=拉取基本面 | fetch-flow=拉取资金流向 | fetch-financial=拉取财务指标 | fetch-reports=拉取研报/EPS | fetch-basic=拉取股票名称/行业 | update=每日增量更新 | 1=特征工程 | 2=训练 | 3=回测 | scan=选股扫描")
     parser.add_argument("--zip", default=None,
                         help="sync 命令专用：通达信压缩包完整路径（如 /path/to/hsjday-2026-05-12.zip）")
@@ -791,6 +815,7 @@ def main():
         "fetch-reports": fetch_reports,
         "fetch-basic": fetch_basic,
         "update": update,
+        "daily": daily,
         "1": phase1,
         "2": phase2,
         "3": phase3,

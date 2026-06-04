@@ -47,3 +47,47 @@ def test_phase1_full_writes_watermark():
     import main as m
     src = inspect.getsource(m.phase1)
     assert "write_features_watermark" in src, "phase1 全量分支未回写 features 水位"
+
+
+def test_daily_registered_in_phases():
+    """daily 必须在 choices 与 phases 字典中注册。"""
+    import main as m
+    src = inspect.getsource(m.main)
+    assert '"daily"' in src or "'daily'" in src, "daily 未注册到 main()"
+
+
+def test_daily_runs_steps_in_order(monkeypatch):
+    """daily 顺序调用 update→fetch_fund→fetch_flow→phase1→scan，且 phase1 走增量。"""
+    import main as m
+    calls = []
+    for name in ["update", "fetch_fund", "fetch_flow", "phase1", "scan"]:
+        monkeypatch.setattr(m, name, (lambda n: (lambda args: calls.append(n)))(name))
+
+    class A:  # 简易 args 容器
+        full = True  # 故意置 True，daily 应在链中强制改为增量
+    a = A()
+    m.daily(a)
+
+    assert calls == ["update", "fetch_fund", "fetch_flow", "phase1", "scan"]
+    assert a.full is False, "daily 应把 args.full 置 False 让 phase1 走增量"
+
+
+def test_daily_fail_fast(monkeypatch):
+    """某步抛异常时，daily 应中止后续并以非零码退出 (SystemExit)。"""
+    import main as m
+    calls = []
+    monkeypatch.setattr(m, "update", lambda args: calls.append("update"))
+    def boom(args):
+        calls.append("fetch_fund")
+        raise RuntimeError("boom")
+    monkeypatch.setattr(m, "fetch_fund", boom)
+    monkeypatch.setattr(m, "fetch_flow", lambda args: calls.append("fetch_flow"))
+    monkeypatch.setattr(m, "phase1", lambda args: calls.append("phase1"))
+    monkeypatch.setattr(m, "scan", lambda args: calls.append("scan"))
+
+    class A:
+        full = False
+    with pytest.raises(SystemExit) as exc:
+        m.daily(A())
+    assert exc.value.code == 1
+    assert calls == ["update", "fetch_fund"]  # 在 fetch_fund 失败后中止
