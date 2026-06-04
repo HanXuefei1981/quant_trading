@@ -254,7 +254,6 @@ def assemble(
     return combined
 
 
-
 def write_features_watermark(df: "pd.DataFrame", meta_repo) -> "date | None":
     """把 features 水位写为 df 中最后【有标签】日（无标签则用最大日）。
 
