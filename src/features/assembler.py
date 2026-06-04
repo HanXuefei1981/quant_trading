@@ -277,6 +277,7 @@ def _write_features_watermark(df: "pd.DataFrame", meta_repo) -> "date | None":
     meta_repo.set_last_date("features", "__market__", new_max, row_count=len(df))
     return new_max
 
+
 def assemble_incremental(
     raw_repo=None,
     feature_repo=None,
@@ -313,11 +314,7 @@ def assemble_incremental(
     if since is None:
         logger.info("features 水位为空，执行全量组装")
         result = assemble(raw_repo=raw_repo, feature_repo=feature_repo)
-        if not result.empty:
-            new_max = result["date"].max()
-            if hasattr(new_max, "date"):
-                new_max = new_max.date()
-            meta_repo.set_last_date("features", "__market__", new_max, row_count=len(result))
+        _write_features_watermark(result, meta_repo)
         return result
 
     since_ts = pd.Timestamp(since)
