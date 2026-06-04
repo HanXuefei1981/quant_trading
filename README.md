@@ -55,8 +55,10 @@ A 股是散户主导的情绪市场，相对于美股需要更注重：
    python main.py update          # tushare 批量拉当日 K 线 + 北向
    python main.py fetch-fund      # 基本面增量（亦可 --since 回填缺口）
    python main.py fetch-flow      # 资金流向 + 北向增量
-   python main.py 1               # 增量重建特征到最新交易日
+   python main.py 1               # 特征工程（增量，仅算新交易日）
    python main.py scan            # 最新推荐
+   # 或一条命令跑完整条链：
+   python main.py daily           # update→fetch-fund→fetch-flow→1(增量)→scan
 ```
 
 ---
@@ -72,7 +74,9 @@ A 股是散户主导的情绪市场，相对于美股需要更注重：
 | `python main.py fetch-financial` | 拉取财务指标 | ROE/ROA/毛利率/净利率/营收/净利润等 → `financial_indicator`（季频）|
 | `python main.py fetch-reports` | 拉取研报 / EPS 共识 | → `reports` / `eps_snapshot` |
 | `python main.py fetch-basic` | 拉取股票名称 / 行业 | tushare `stock_basic` → DuckDB `stock_basic`，供 scan 关联名称与行业；名称/行业变动少，需要时手动重跑刷新 |
-| `python main.py 1 [--sample N]` | Phase 1：数据 + 特征 | K 线 + 基本面 + 信号合并 → 因子；逐日流式预处理写表（低内存）|
+| `python main.py 1 [--sample N]` | Phase 1：特征工程（**增量**） | 仅处理 features 水位之后的新交易日，写盘量小（日常默认）|
+| `python main.py 1 --full` | Phase 1：特征工程（**全量重建**） | 重算全表 + 回写水位；耗时长、写盘量大，应急/换数据源用 |
+| `python main.py daily` | 一键日更链 | update→fetch-fund→fetch-flow→1(增量)→scan，fail-fast |
 | `python main.py 2 [--rolling] [--final]` | Phase 2：模型训练 | LightGBM 三分类 + Ridge 回归，按 IC 加权集成；`--rolling` 滚动窗口，`--final` 全量重训生产模型 |
 | `python main.py 3 [--top-k 50 --rebalance 5]` | Phase 3：组合回测 | 含费率、板块上限、换手率上限 |
 | `python main.py scan --top-k 10 [--confirm K] [--holdings c1,c2]` | 实时扫描 | 最新截面 Top-K 富信息表（名称/行业/估值/财务 + **连榜**）；`--confirm K` 仅把连续 K 次在榜的标为✓可建仓（过滤一日游）；`--holdings` 输出 继续持有/卖出/新建仓 三栏。存 `data/backtest/scan_YYYY-MM-DD.csv`（需先 `fetch-basic`）|
