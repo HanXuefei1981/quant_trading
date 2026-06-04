@@ -734,9 +734,11 @@ def daily(args):
     """一键日更：update → fetch-fund → fetch-flow → Phase1(增量) → scan。
 
     fail-fast：任一步抛异常即记录失败步骤并以退出码 1 结束，后续步骤不执行。
-    链中 Phase1 强制走增量（args.full=False）。
+    链中 Phase1 强制走增量（在 args 的副本上置 full=False，不改动调用方 args）。
     """
-    args.full = False  # 链中 Phase1 始终增量
+    import copy
+    inner_args = copy.copy(args)
+    inner_args.full = False  # 仅作用于副本，链中 Phase1 始终增量
     steps = [
         ("update", update),
         ("fetch-fund", fetch_fund),
@@ -747,7 +749,7 @@ def daily(args):
     for name, fn in steps:
         logger.info(f"===== 一键日更 ▶ {name} =====")
         try:
-            fn(args)
+            fn(inner_args)
         except Exception:
             logger.exception(f"一键日更在步骤 [{name}] 失败，已中止")
             raise SystemExit(1)

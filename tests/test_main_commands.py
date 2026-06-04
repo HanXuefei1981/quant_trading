@@ -57,19 +57,27 @@ def test_daily_registered_in_phases():
 
 
 def test_daily_runs_steps_in_order(monkeypatch):
-    """daily 顺序调用 update→fetch_fund→fetch_flow→phase1→scan，且 phase1 走增量。"""
+    """daily 顺序调用 update→fetch_fund→fetch_flow→phase1→scan，phase1 收到增量(full=False)，且不改动调用方 args。"""
     import main as m
     calls = []
-    for name in ["update", "fetch_fund", "fetch_flow", "phase1", "scan"]:
-        monkeypatch.setattr(m, name, (lambda n: (lambda args: calls.append(n)))(name))
+    captured = {}
+    monkeypatch.setattr(m, "update", lambda args: calls.append("update"))
+    monkeypatch.setattr(m, "fetch_fund", lambda args: calls.append("fetch_fund"))
+    monkeypatch.setattr(m, "fetch_flow", lambda args: calls.append("fetch_flow"))
+    def fake_phase1(args):
+        calls.append("phase1")
+        captured["full"] = args.full
+    monkeypatch.setattr(m, "phase1", fake_phase1)
+    monkeypatch.setattr(m, "scan", lambda args: calls.append("scan"))
 
-    class A:  # 简易 args 容器
-        full = True  # 故意置 True，daily 应在链中强制改为增量
+    class A:
+        full = True  # 调用方设 full=True，daily 不应改动它
     a = A()
     m.daily(a)
 
     assert calls == ["update", "fetch_fund", "fetch_flow", "phase1", "scan"]
-    assert a.full is False, "daily 应把 args.full 置 False 让 phase1 走增量"
+    assert captured["full"] is False, "phase1 应在副本上收到 full=False（增量）"
+    assert a.full is True, "daily 不应就地修改调用方 args（不可变性）"
 
 
 def test_daily_fail_fast(monkeypatch):
