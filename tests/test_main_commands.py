@@ -1,4 +1,5 @@
 import sys, inspect
+import pytest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -23,3 +24,26 @@ def test_ingest_function_exists():
     """ingest() 函数必须存在。"""
     import main as m
     assert hasattr(m, "ingest"), "main.py 中没有 ingest() 函数"
+
+
+def test_full_flag_registered():
+    """argparse 必须注册 --full 标志（dest=full）。"""
+    import main as m
+    src = inspect.getsource(m.main)
+    assert '"--full"' in src or "'--full'" in src, "main() 未注册 --full"
+
+
+def test_phase1_branches_on_full():
+    """phase1 必须依据 args.full 在 assemble_incremental 与 assemble 间分支。"""
+    import main as m
+    src = inspect.getsource(m.phase1)
+    assert "assemble_incremental" in src, "phase1 未走增量 assemble_incremental"
+    assert "assemble(" in src, "phase1 未保留全量 assemble()"
+    assert "full" in src, "phase1 未根据 args.full 分支"
+
+
+def test_phase1_full_writes_watermark():
+    """phase1 全量分支必须回写水位（调用 _write_features_watermark）。"""
+    import main as m
+    src = inspect.getsource(m.phase1)
+    assert "_write_features_watermark" in src, "phase1 全量分支未回写 features 水位"
