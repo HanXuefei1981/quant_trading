@@ -254,6 +254,29 @@ def assemble(
     return combined
 
 
+
+def _write_features_watermark(df: "pd.DataFrame", meta_repo) -> "date | None":
+    """把 features 水位写为 df 中最后【有标签】日（无标签则用最大日）。
+
+    增量与全量两条路径共用，保证水位语义一致：下次增量从此日向前重算，
+    给之前无标签的最近行补标签并延伸新尾部。
+
+    Args:
+        df: 含 date / label 列的特征 DataFrame。
+        meta_repo: MetaRepo 实例。
+    Returns:
+        实际写入的日期；df 为空时返回 None（不写）。
+    """
+    if df is None or df.empty:
+        return None
+    labeled = df[df["label"].notna()]
+    src = labeled if not labeled.empty else df
+    new_max = src["date"].max()
+    if hasattr(new_max, "date"):
+        new_max = new_max.date()
+    meta_repo.set_last_date("features", "__market__", new_max, row_count=len(df))
+    return new_max
+
 def assemble_incremental(
     raw_repo=None,
     feature_repo=None,
@@ -370,10 +393,7 @@ def assemble_incremental(
 
     # 水位设为最后**有标签**日：下次增量从此向前重算，给之前无标签的最近行补上标签，
     # 并延伸新的无标签尾部，保证标签最终都被填充。
-    labeled = combined[combined["label"].notna()]
-    watermark_src = labeled if not labeled.empty else combined
-    new_max_date = watermark_src["date"].max().date()
-    meta_repo.set_last_date("features", "__market__", new_max_date, row_count=len(combined))
+    new_max_date = _write_features_watermark(combined, meta_repo)
     logger.info(
         f"增量完成：新增 {len(combined)} 行（含无标签最近行），已写入 FeatureRepo，"
         f"水位（最后有标签日）更新至 {new_max_date}"

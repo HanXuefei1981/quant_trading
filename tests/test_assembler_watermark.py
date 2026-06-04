@@ -140,3 +140,35 @@ def test_watermark_updated_after_incremental(conn):
 
     updated = meta_repo.get_last_date("features", "__market__")
     assert updated == date(2024, 5, 1), f"watermark must advance to max new date, got {updated}"
+
+
+# ── _write_features_watermark helper ─────────────────────────────────────────
+
+def test_write_features_watermark_uses_last_labeled_date(conn):
+    """helper 应把水位写为 df 中最后【有标签】日，并返回该日期。"""
+    from src.features.assembler import _write_features_watermark
+    from src.dal.meta_repo import MetaRepo
+
+    meta_repo = MetaRepo(conn)
+    df = pd.DataFrame({
+        "date": pd.to_datetime(["2026-06-01", "2026-06-02", "2026-06-03"]),
+        "code": ["000001", "000001", "000001"],
+        "label": [1.0, 0.0, float("nan")],  # 06-03 无标签
+    })
+
+    written = _write_features_watermark(df, meta_repo)
+
+    assert written == date(2026, 6, 2)
+    assert meta_repo.get_last_date("features", "__market__") == date(2026, 6, 2)
+
+
+def test_write_features_watermark_empty_df_is_noop(conn):
+    """空 df 不写水位、返回 None。"""
+    from src.features.assembler import _write_features_watermark
+    from src.dal.meta_repo import MetaRepo
+
+    meta_repo = MetaRepo(conn)
+    written = _write_features_watermark(pd.DataFrame(), meta_repo)
+
+    assert written is None
+    assert meta_repo.get_last_date("features", "__market__") is None
