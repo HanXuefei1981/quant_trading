@@ -41,7 +41,8 @@ def test_readonly_reuses_existing_readwrite_singleton(tmp_db):
 
 def test_readonly_fresh_when_no_singleton(tmp_db):
     """无读写单例时，get_db(read_only=True) 新开可用只读连接，且不创建读写单例。"""
-    duckdb.connect(str(tmp_db)).close()  # DuckDB 只读要求库文件已存在，先建之
+    with duckdb.connect(str(tmp_db)):  # DuckDB 只读要求库文件已存在，先建之
+        pass
     assert conn_mod._conn is None
     ro = conn_mod.get_db(read_only=True)
     try:

@@ -18,6 +18,10 @@ def get_db(read_only: bool = False) -> duckdb.DuckDBPyConnection:
         调用方负责关闭。
 
     read_only=False（默认）：返回读写单例，供写入命令（fetch/Phase1/upsert）使用。
+
+    注意（边界）：本函数只解决「读写单例已存在 → 只读请求复用之」。反向路径
+    「同进程先开只读连接、之后再请求读写」DuckDB 仍会冲突；当前调用图不会出现
+    （进程内写入步骤总在只读步骤之前），故不在修复范围。
     """
     global _conn
     if read_only:
