@@ -1,6 +1,18 @@
-"""Tushare Pro 客户端工厂
+"""Tushare Pro 客户端工厂（全项目唯一初始化入口）
 
-使用私有代理服务器，token 和 URL 从环境变量读取（config/settings.py 统一注入）。
+使用私有代理服务器，token 和 URL 从 .env 读取（config/settings.py 统一注入）。
+**所有 tushare 调用都必须经由本文件的 get_pro_api()，不要在别处自行 ts.pro_api()。**
+
+调用约定（私有代理服务器关键点）：
+    import tushare as ts
+    pro = ts.pro_api(TUSHARE_TOKEN)
+    pro._DataApi__http_url = TUSHARE_HTTP_URL   # ⭐️ 必须有这行，否则会打到官方服务器报「无效的 token」
+    df = pro.index_basic(limit=5)
+    bar = ts.pro_bar(api=pro, ts_code="000001.SZ", limit=3)   # pro_bar 需显式传 api=pro
+
+凭证配置在 .env（勿提交）：
+    TUSHARE_TOKEN=<token>
+    TUSHARE_HTTP_URL=http://<host>:<port>/
 
 用法：
     from src.data.tushare_client import get_pro_api
