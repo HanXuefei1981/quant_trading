@@ -9,15 +9,21 @@ _conn: duckdb.DuckDBPyConnection | None = None
 def get_db(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     """返回 DuckDB 连接。
 
-    read_only=True 时返回一个**全新的只读连接**（不走单例）：DuckDB 单写多读，
-    只读连接之间可跨进程并存。仅读取的流水线步骤（Phase 2/3 只读 features，模型存盘）
-    用它即可与开着的 monitor（同样只读）并行运行，互不抢写锁。调用方负责关闭。
+    read_only=True：
+      - 若本进程已持有读写单例 `_conn`，**复用它**（读写连接亦可读）——避免
+        DuckDB「同进程对同一库不能用不同配置再开连接」的冲突（如 daily 链内
+        update/Phase1 已开读写连接后，scan 再请求只读）。
+      - 否则新开一个全新只读连接：DuckDB 单写多读，只读连接可跨进程并存，
+        让独立运行的只读步骤（scan / Phase2/3）与开着的 monitor 并行、不抢写锁。
+        调用方负责关闭。
 
-    read_only=False（默认）返回读写单例，供写入命令（fetch/Phase1/upsert）使用。
+    read_only=False（默认）：返回读写单例，供写入命令（fetch/Phase1/upsert）使用。
     """
-    if read_only:
-        return duckdb.connect(str(DB_PATH), read_only=True)
     global _conn
+    if read_only:
+        if _conn is not None:
+            return _conn
+        return duckdb.connect(str(DB_PATH), read_only=True)
     if _conn is None:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         _conn = duckdb.connect(str(DB_PATH))
