@@ -34,6 +34,8 @@ CMD_MAP: dict[str, list[str]] = {
     "fetch-financial":  [_PYTHON, "main.py", "fetch-financial"],
     "fetch-reports":    [_PYTHON, "main.py", "fetch-reports"],
     "phase1":           [_PYTHON, "main.py", "1"],
+    "phase1-full":      [_PYTHON, "main.py", "1", "--full"],
+    "daily":            [_PYTHON, "main.py", "daily"],
     "phase2-rolling":   [_PYTHON, "main.py", "2", "--rolling"],
     "phase2-final":     [_PYTHON, "main.py", "2", "--final"],
     "phase3":           [_PYTHON, "main.py", "3"],

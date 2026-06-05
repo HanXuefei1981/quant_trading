@@ -56,12 +56,21 @@ def test_cmd_map_has_all_keys():
         "fetch-financial",
         "fetch-reports",
         "phase1",
+        "phase1-full",
+        "daily",
         "phase2-rolling",
         "phase2-final",
         "phase3",
         "scan",
     }
     assert set(CMD_MAP.keys()) == expected_keys
+
+
+def test_cmd_map_phase1_is_incremental_and_full_separate():
+    """phase1 映射到 main.py 1（增量）；phase1-full 映射到 1 --full；daily 映射到 daily。"""
+    assert CMD_MAP["phase1"][-1:] == ["1"]
+    assert CMD_MAP["phase1-full"][-2:] == ["1", "--full"]
+    assert CMD_MAP["daily"][-1:] == ["daily"]
 
 
 # ---------------------------------------------------------------------------

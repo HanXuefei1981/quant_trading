@@ -443,10 +443,21 @@ def phase1(args):
         )
         logger.warning("建议先运行: python main.py fetch-fund  （约 1-2 小时）")
 
-    from src.features.assembler import assemble
-    df = assemble(
-        sample_size=args.sample,
-    )
+    if getattr(args, "full", False):
+        from src.features.assembler import assemble, write_features_watermark
+        from src.dal.meta_repo import MetaRepo
+        logger.info("Phase 1【全量重建】：assemble() 重算全表（耗时较长、写盘量大）")
+        df = assemble(sample_size=args.sample)
+        write_features_watermark(df, MetaRepo(conn))
+    else:
+        from src.features.assembler import assemble_incremental
+        logger.info("Phase 1【增量日更】：assemble_incremental() 仅处理新交易日")
+        df = assemble_incremental()
+
+    if df is None or df.empty:
+        logger.info("Phase 1 完成：无新交易日数据")
+        return
+
     logger.info(f"Phase 1 完成，数据集形状: {df.shape}")
     logger.info(f"特征列数: {df.shape[1]}")
     logger.info(f"时间范围: {df['date'].min()} ~ {df['date'].max()}")
@@ -719,14 +730,42 @@ def scan(args):
     logger.info(f"完整候选列表（含基本面）已保存至 {out_path}")
 
 
+def daily(args):
+    """一键日更：update → fetch-fund → fetch-flow → Phase1(增量) → scan。
+
+    fail-fast：任一步抛异常即记录失败步骤并以退出码 1 结束，后续步骤不执行。
+    链中 Phase1 强制走增量（在 args 的副本上置 full=False，不改动调用方 args）。
+    """
+    import copy
+    inner_args = copy.copy(args)
+    inner_args.full = False  # 仅作用于副本，链中 Phase1 始终增量
+    steps = [
+        ("update", update),
+        ("fetch-fund", fetch_fund),
+        ("fetch-flow", fetch_flow),
+        ("1(增量)", phase1),
+        ("scan", scan),
+    ]
+    for name, fn in steps:
+        logger.info(f"===== 一键日更 ▶ {name} =====")
+        try:
+            fn(inner_args)
+        except Exception:
+            logger.exception(f"一键日更在步骤 [{name}] 失败，已中止")
+            raise SystemExit(1)
+    logger.info("===== 一键日更完成 =====")
+
+
 def main():
     parser = argparse.ArgumentParser(description="A 股量化交易系统")
-    parser.add_argument("phase", choices=["ingest", "sync", "collect", "fetch-fund", "fetch-flow", "fetch-financial", "fetch-reports", "fetch-basic", "update", "1", "2", "3", "scan"],
+    parser.add_argument("phase", choices=["ingest", "sync", "collect", "fetch-fund", "fetch-flow", "fetch-financial", "fetch-reports", "fetch-basic", "update", "daily", "1", "2", "3", "scan"],
                         help="运行阶段：sync=同步TDX数据 | collect=采集原始数据 | fetch-fund=拉取基本面 | fetch-flow=拉取资金流向 | fetch-financial=拉取财务指标 | fetch-reports=拉取研报/EPS | fetch-basic=拉取股票名称/行业 | update=每日增量更新 | 1=特征工程 | 2=训练 | 3=回测 | scan=选股扫描")
     parser.add_argument("--zip", default=None,
                         help="sync 命令专用：通达信压缩包完整路径（如 /path/to/hsjday-2026-05-12.zip）")
     parser.add_argument("--refresh", action="store_true",
                         help="fetch-fund 专用：忽略本地缓存，强制重新拉取")
+    parser.add_argument("--full", action="store_true",
+                        help="phase1(1): 全量重建特征表（默认增量日更，仅处理新交易日）")
     parser.add_argument("--sample", type=int, default=None, help="调试时限制股票数量")
     parser.add_argument("--delay", type=float, default=0.3, help="拉取间隔（秒）")
     parser.add_argument("--no-cache", action="store_true", help="强制重新下载数据（phase1 已默认全量更新）")
@@ -778,6 +817,7 @@ def main():
         "fetch-reports": fetch_reports,
         "fetch-basic": fetch_basic,
         "update": update,
+        "daily": daily,
         "1": phase1,
         "2": phase2,
         "3": phase3,
