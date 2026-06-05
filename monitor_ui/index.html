@@ -274,9 +274,9 @@ tr:hover td{background:#1e293b40}
   <div class="section-title">选股信号 <span id="scan-meta" style="color:#334155;font-size:10px"></span></div>
   <div class="tbl-wrap">
     <table>
-      <thead><tr><th>#</th><th>代码</th><th>板块</th><th>收盘价</th><th>信号值</th><th>分位</th><th>主力流入</th><th>状态</th></tr></thead>
+      <thead><tr><th>#</th><th>代码</th><th>板块</th><th>收盘价</th><th>信号值</th><th>分位</th><th>主力流入</th><th>连榜</th><th>状态</th></tr></thead>
       <tbody id="scan-body">
-        <tr><td colspan="8" style="text-align:center;color:#334155;padding:20px">暂无信号数据</td></tr>
+        <tr><td colspan="9" style="text-align:center;color:#334155;padding:20px">暂无信号数据</td></tr>
       </tbody>
     </table>
   </div>
@@ -394,7 +394,7 @@ function renderScan(sc) {
   if (!sc) return;
   if (sc.date) $('scan-meta').textContent=`${sc.date}  Top-${sc.top_n||50}`;
   const sigs=sc.signals||[];
-  if (!sigs.length) { $('scan-body').innerHTML='<tr><td colspan="8" style="text-align:center;color:#334155;padding:20px">暂无信号</td></tr>'; return; }
+  if (!sigs.length) { $('scan-body').innerHTML='<tr><td colspan="9" style="text-align:center;color:#334155;padding:20px">暂无信号</td></tr>'; return; }
   $('scan-body').innerHTML=sigs.map(s=>{
     const ri=s.rank<=1?'r1':s.rank<=2?'r2':s.rank<=3?'r3':'rn';
     const barW=Math.min(100,Math.max(0,(s.signal_pct||0)*100));
@@ -408,6 +408,7 @@ function renderScan(sc) {
       <td><div style="display:flex;align-items:center;gap:6px"><span style="color:#f87171">${fmtNum(s.signal)}</span><div class="sig-bar-bg"><div class="sig-bar" style="width:${barW}%"></div></div></div></td>
       <td style="color:#94a3b8">${pct(s.signal_pct)}</td>
       <td style="color:${ffColor}">${s.fund_flow!=null?(s.fund_flow>0?'+':'')+s.fund_flow.toFixed(0)+'万':'—'}</td>
+      <td style="color:#94a3b8">${s.streak!=null?s.streak:'—'}</td>
       <td>${stTag}</td>
     </tr>`;
   }).join('');

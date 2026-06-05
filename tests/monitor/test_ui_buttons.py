@@ -33,3 +33,8 @@ def test_existing_collection_buttons_preserved():
                 "phase2-rolling", "phase2-final", "phase3"]:
         assert f"runCmd('{cmd}')" in HTML, f"按钮 {cmd} 丢失"
         assert f'id="btn-{cmd}"' in HTML, f"按钮 id btn-{cmd} 丢失"
+
+
+def test_scan_table_has_streak_column():
+    assert "<th>连榜</th>" in HTML
+    assert "s.streak" in HTML  # 行模板引用 streak
