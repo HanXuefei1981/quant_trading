@@ -61,7 +61,11 @@ def test_daily_runs_steps_in_order(monkeypatch):
     import main as m
     calls = []
     captured = {}
-    monkeypatch.setattr(m, "update", lambda args: calls.append("update"))
+    from src.collectors.base import CollectStats
+    def fake_update(args):
+        calls.append("update")
+        return CollectStats(ok=1)
+    monkeypatch.setattr(m, "update", fake_update)
     monkeypatch.setattr(m, "fetch_fund", lambda args: calls.append("fetch_fund"))
     monkeypatch.setattr(m, "fetch_flow", lambda args: calls.append("fetch_flow"))
     def fake_phase1(args):
@@ -84,7 +88,11 @@ def test_daily_fail_fast(monkeypatch):
     """某步抛异常时，daily 应中止后续并以非零码退出 (SystemExit)。"""
     import main as m
     calls = []
-    monkeypatch.setattr(m, "update", lambda args: calls.append("update"))
+    from src.collectors.base import CollectStats
+    def fake_update(args):
+        calls.append("update")
+        return CollectStats(ok=1)
+    monkeypatch.setattr(m, "update", fake_update)
     def boom(args):
         calls.append("fetch_fund")
         raise RuntimeError("boom")
@@ -99,3 +107,32 @@ def test_daily_fail_fast(monkeypatch):
         m.daily(A())
     assert exc.value.code == 1
     assert calls == ["update", "fetch_fund"]  # 在 fetch_fund 失败后中止
+
+
+def test_update_returns_kline_stats():
+    """update() 必须返回 kline 统计（供 daily 判定无新数据）。"""
+    import main as m
+    src = inspect.getsource(m.update)
+    assert "return kline_stats" in src, "update() 未返回 kline_stats"
+
+
+def test_daily_aborts_when_no_new_data(monkeypatch):
+    """update 无新交易日(ok==0) → SystemExit(2)，后续步骤不执行。"""
+    import main as m
+    from src.collectors.base import CollectStats
+    calls = []
+    def fake_update(args):
+        calls.append("update")
+        return CollectStats(ok=0)  # 无新交易日
+    monkeypatch.setattr(m, "update", fake_update)
+    monkeypatch.setattr(m, "fetch_fund", lambda args: calls.append("fetch_fund"))
+    monkeypatch.setattr(m, "fetch_flow", lambda args: calls.append("fetch_flow"))
+    monkeypatch.setattr(m, "phase1", lambda args: calls.append("phase1"))
+    monkeypatch.setattr(m, "scan", lambda args: calls.append("scan"))
+
+    class A:
+        full = False
+    with pytest.raises(SystemExit) as exc:
+        m.daily(A())
+    assert exc.value.code == 2
+    assert calls == ["update"], "无新数据时不应执行后续步骤"

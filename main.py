@@ -402,6 +402,7 @@ def update(args):
             wm.update("tencent", date_cls.today())
 
     logger.info("update 完成（特征工程请在所有数据采集完毕后运行 Phase 1）")
+    return kline_stats
 
 
 def phase1(args):
@@ -733,14 +734,28 @@ def scan(args):
 def daily(args):
     """一键日更：update → fetch-fund → fetch-flow → Phase1(增量) → scan。
 
-    fail-fast：任一步抛异常即记录失败步骤并以退出码 1 结束，后续步骤不执行。
-    链中 Phase1 强制走增量（在 args 的副本上置 full=False，不改动调用方 args）。
+    fail-fast：
+      - update 未获取到新交易日数据（kline ok==0）→ 退出码 2 提前中止；
+      - 任一步抛异常 → 退出码 1 中止。
+    后续步骤不执行。链中 Phase1 强制走增量（在 args 的副本上置 full=False，不改动调用方 args）。
     """
     import copy
     inner_args = copy.copy(args)
     inner_args.full = False  # 仅作用于副本，链中 Phase1 始终增量
+
+    # 步骤 1：update —— 无新交易日数据则提前中止，避免后续空转
+    logger.info("===== 一键日更 ▶ update =====")
+    try:
+        stats = update(inner_args)
+    except Exception:
+        logger.exception("一键日更在步骤 [update] 失败，已中止")
+        raise SystemExit(1)
+    if stats is None or stats.ok == 0:
+        logger.error("一键日更：update 未获取到新交易日数据（非交易日 / 数据未就绪 / token 失效？），已中止，后续步骤跳过")
+        raise SystemExit(2)
+
+    # 步骤 2+：基本面 / 资金流 / 特征增量 / 选股
     steps = [
-        ("update", update),
         ("fetch-fund", fetch_fund),
         ("fetch-flow", fetch_flow),
         ("1(增量)", phase1),
