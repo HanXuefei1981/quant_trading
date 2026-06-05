@@ -1,9 +1,12 @@
 """Scan signals reader for the monitoring dashboard."""
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -18,6 +21,7 @@ class SignalRow:
     signal_pct: float
     north_5d: Optional[float]   # always None — northbound is aggregate, not per-stock
     fund_flow: Optional[float]  # latest major_net_inflow, or None if unavailable
+    streak: Optional[int]       # 连榜：截至当日连续在榜次数，缺则 None
     status: str                 # "hold" for rank <= top_n, "buffer" for buffer rows
 
 
@@ -72,37 +76,39 @@ def get_scan(data_dir: Path, top_n: int = 50, buffer_n: int = 5) -> ScanData:
     if not scan_files:
         return ScanData(date=None, top_n=top_n, buffer_n=buffer_n)
 
-    # Latest file is the last alphabetically (YYYY-MM-DD sorts correctly)
+    # 最新文件按文件名字典序最后（scan_YYYY-MM-DD 可正确排序）
     latest_file = scan_files[-1]
+    date_str = latest_file.stem[len("scan_"):]  # "scan_2026-06-04" → "2026-06-04"
 
-    # Extract date from filename: scan_YYYY-MM-DD.csv
-    stem = latest_file.stem  # e.g. "scan_2026-05-18"
-    date_str = stem[len("scan_"):]  # "2026-05-18"
+    df = pd.read_csv(latest_file)
 
-    df = pd.read_csv(latest_file, dtype={"code": str})
+    # 优雅降级：缺必需中文列（如最新文件恰为旧英文格式）→ 返回空，避免 /api/status 500
+    required = ["排名", "代码", "收盘价", "信号值", "信号分位"]
+    if not all(col in df.columns for col in required):
+        logger.warning("scan CSV %s 缺必需列 %s，返回空信号", latest_file.name, required)
+        return ScanData(date=date_str, top_n=top_n, buffer_n=buffer_n)
 
-    # Zero-pad code to 6 digits (handles int-stored codes like 89 → "000089")
-    df["code"] = df["code"].apply(lambda c: str(int(float(c))).zfill(6))
-
-    # Sort by rank ascending and take top_n + buffer_n rows
-    df = df.sort_values("rank").head(top_n + buffer_n)
+    df = df.sort_values("排名").head(top_n + buffer_n)
 
     signals: list[SignalRow] = []
     for _, row in df.iterrows():
-        rank = int(row["rank"])
-        code = str(row["code"])
+        rank = int(row["排名"])
+        code = str(int(float(row["代码"]))).zfill(6)  # 整数/字符串代码统一补零到 6 位
         status = "hold" if rank <= top_n else "buffer"
         fund_flow = _latest_fund_flow(data_dir, code)
+        streak = int(row["连榜"]) if "连榜" in df.columns and pd.notna(row["连榜"]) else None
+        segment = str(row["板块"]) if "板块" in df.columns and pd.notna(row["板块"]) else "—"
 
         signals.append(SignalRow(
             rank=rank,
             code=code,
-            segment=str(row["segment"]),
-            close=float(row["close"]),
-            signal=float(row["signal"]),
-            signal_pct=float(row["signal_pct"]),
+            segment=segment,
+            close=float(row["收盘价"]),
+            signal=float(row["信号值"]),
+            signal_pct=float(row["信号分位"]),
             north_5d=None,
             fund_flow=fund_flow,
+            streak=streak,
             status=status,
         ))
 
