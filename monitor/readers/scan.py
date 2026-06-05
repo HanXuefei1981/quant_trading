@@ -90,14 +90,17 @@ def get_scan(data_dir: Path, top_n: int = 50, buffer_n: int = 5) -> ScanData:
 
     df = df.sort_values("排名").head(top_n + buffer_n)
 
+    has_streak = "连榜" in df.columns
+    has_segment = "板块" in df.columns
+
     signals: list[SignalRow] = []
     for _, row in df.iterrows():
         rank = int(row["排名"])
         code = str(int(float(row["代码"]))).zfill(6)  # 整数/字符串代码统一补零到 6 位
         status = "hold" if rank <= top_n else "buffer"
         fund_flow = _latest_fund_flow(data_dir, code)
-        streak = int(row["连榜"]) if "连榜" in df.columns and pd.notna(row["连榜"]) else None
-        segment = str(row["板块"]) if "板块" in df.columns and pd.notna(row["板块"]) else "—"
+        streak = int(row["连榜"]) if has_streak and pd.notna(row["连榜"]) else None
+        segment = str(row["板块"]) if has_segment and pd.notna(row["板块"]) else "—"
 
         signals.append(SignalRow(
             rank=rank,

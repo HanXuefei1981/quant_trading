@@ -226,3 +226,26 @@ class TestScanStreakAndDegrade:
         assert isinstance(result, ScanData)
         assert result.date == "2026-06-04"
         assert result.signals == []
+
+    def test_segment_falls_back_when_board_column_missing(self, tmp_path):
+        """板块 列缺失时 segment 回落为 '—'（必需列齐全，仅缺可选列）。"""
+        rows = [{
+            "排名": 1, "代码": "300500", "名称": "x", "行业": "元器件",
+            "收盘价": 10.0, "信号值": 1.5, "信号分位": 1.0, "连榜": 3,
+        }]  # 无 板块 列
+        _make_scan_csv(tmp_path, "2026-06-04", rows)
+        result = get_scan(tmp_path, top_n=1, buffer_n=0)
+        assert result.signals[0].segment == "—"
+        assert result.signals[0].streak == 3
+
+    def test_streak_none_when_value_missing(self, tmp_path):
+        """某行 连榜 为空(NaN) 时 streak 为 None。"""
+        import numpy as np
+        rows = [{
+            "排名": 1, "代码": "300500", "名称": "x", "行业": "元器件",
+            "板块": "创业板", "收盘价": 10.0, "信号值": 1.5,
+            "信号分位": 1.0, "连榜": np.nan,
+        }]
+        _make_scan_csv(tmp_path, "2026-06-04", rows)
+        result = get_scan(tmp_path, top_n=1, buffer_n=0)
+        assert result.signals[0].streak is None
